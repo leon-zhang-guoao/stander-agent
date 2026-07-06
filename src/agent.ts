@@ -4,6 +4,7 @@ import type { AgentStreamEvent, ContentBlock } from '@strands-agents/sdk'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
 import { execSync } from 'node:child_process'
+import { loadConfig } from './config'
 
 const fileReader = tool({
   name: 'read_file',
@@ -83,6 +84,7 @@ const calculator = tool({
 })
 
 export function createAgent() {
+  const config = loadConfig()
   const conversationManager = new SlidingWindowConversationManager({
     windowSize: 40,
     shouldTruncateResults: true,
@@ -91,12 +93,10 @@ export function createAgent() {
   return new Agent({
     model: new OpenAIModel({
       api: 'chat',
-      modelId: process.env.MODEL_ID ?? 'azure-gpt-o4-mini',
+      modelId: config.modelId,
       apiKey: process.env.OPENAI_API_KEY ?? 'dummy-key',
       clientConfig: {
-        baseURL:
-          process.env.OPENAI_BASE_URL ??
-          'http://fca-vm-uat-nifi-edge3.synnex.org:4000/v1',
+        baseURL: config.baseURL,
       },
     }),
     systemPrompt:

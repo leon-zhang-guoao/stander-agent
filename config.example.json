@@ -1,0 +1,4 @@
+{
+  "modelId": "your-model-id",
+  "baseURL": "https://your-openai-compatible-endpoint/v1"
+}
