@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stander Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="rail">
+        <div class="rail-header">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 40 40" role="img">
+              <path d="M20 4 34 12v16L20 36 6 28V12L20 4Z" />
+              <path d="M14 17.5h12M14 22.5h8" />
+            </svg>
+          </div>
+          <div>
+            <strong>Sessions</strong>
+            <span id="sessionCount">0 active</span>
+          </div>
+        </div>
+
+        <div class="rail-actions">
+          <button id="newChatButton" class="icon-button" type="button" title="新会话" aria-label="新会话">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+          <button id="clearButton" class="icon-button" type="button" title="清空当前会话消息" aria-label="清空当前会话消息">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 6h18M8 6V4h8v2M9 11v6M15 11v6M6 6l1 14h10l1-14" />
+            </svg>
+          </button>
+        </div>
+
+        <nav id="sessionsList" class="session-list" aria-label="会话列表"></nav>
+      </aside>
+
+      <section class="chat-panel" aria-label="聊天">
+        <header class="topbar">
+          <div>
+            <h1>Stander Agent</h1>
+            <p id="sessionLabel">Session ready</p>
+          </div>
+          <div id="status" class="status" data-state="idle">
+            <span></span>
+            <strong>Idle</strong>
+          </div>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="chatForm" class="composer">
+          <textarea
+            id="messageInput"
+            name="message"
+            rows="1"
+            placeholder="输入消息..."
+            autocomplete="off"
+          ></textarea>
+          <button id="stopButton" class="icon-button stop-button" type="button" title="停止" aria-label="停止" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 8h8v8H8z" />
+            </svg>
+          </button>
+          <button id="sendButton" class="send-button" type="submit" title="发送" aria-label="发送">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" />
+            </svg>
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

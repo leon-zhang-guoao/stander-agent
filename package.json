@@ -1,0 +1,25 @@
+{
+  "name": "stander-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node node_modules/typescript/bin/tsc && node dist/main.js",
+    "dev:server": "node node_modules/typescript/bin/tsc && node dist/server.js",
+    "build": "node node_modules/typescript/bin/tsc --noEmit",
+    "test": "npm run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@strands-agents/sdk": "^1.7.0",
+    "openai": "^6.45.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "tsx": "^4.22.5",
+    "typescript": "^6.0.3"
+  }
+}
