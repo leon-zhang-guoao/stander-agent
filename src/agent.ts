@@ -3,8 +3,20 @@ import { OpenAIModel } from '@strands-agents/sdk/models/openai'
 import type { AgentStreamEvent, ContentBlock } from '@strands-agents/sdk'
 import { z } from 'zod'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { execSync } from 'node:child_process'
 import { loadConfig } from './config'
+
+function resolveWorkspacePath(filePath: string) {
+  const workspaceRoot = process.cwd()
+  const resolvedPath = path.resolve(workspaceRoot, filePath)
+
+  if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('文件路径必须位于当前项目目录内')
+  }
+
+  return resolvedPath
+}
 
 const fileReader = tool({
   name: 'read_file',
@@ -20,6 +32,37 @@ const fileReader = tool({
         : content
     } catch (err: any) {
       return `读取文件失败: ${err.message}`
+    }
+  },
+})
+
+const fileWriter = tool({
+  name: 'write_file',
+  description: '写入文本文件；会自动创建父目录，默认不覆盖已有文件',
+  inputSchema: z.object({
+    path: z.string().describe('项目目录内的文件路径'),
+    content: z.string().describe('要写入文件的文本内容'),
+    overwrite: z.boolean().default(false).describe('是否覆盖已存在的文件'),
+  }),
+  callback: async ({ path: filePath, content, overwrite }) => {
+    try {
+      const resolvedPath = resolveWorkspacePath(filePath)
+
+      if (!overwrite) {
+        try {
+          await fs.access(resolvedPath)
+          return '写入失败: 文件已存在，如需覆盖请设置 overwrite=true'
+        } catch {
+          // File does not exist; proceed.
+        }
+      }
+
+      await fs.mkdir(path.dirname(resolvedPath), { recursive: true })
+      await fs.writeFile(resolvedPath, content, 'utf-8')
+
+      return `写入成功: ${path.relative(process.cwd(), resolvedPath)}`
+    } catch (err: any) {
+      return `写入文件失败: ${err.message}`
     }
   },
 })
@@ -101,7 +144,7 @@ export function createAgent() {
     }),
     systemPrompt:
       '你是一个 helpful assistant，请用中文回答。可以使用工具帮助用户。',
-    tools: [fileReader, shellTool, httpTool, calculator],
+    tools: [fileReader, fileWriter, shellTool, httpTool, calculator],
     conversationManager,
   })
 }
