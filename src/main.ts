@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises'
 import { stdin as input, stdout as output } from 'node:process'
 import { createAgent, getTextDelta, getToolUseName, isToolResultEvent } from './agent'
+import { withTriggeredSkills } from './skills'
 
 // ==========================================
 // 主程序
@@ -27,7 +28,7 @@ async function main() {
     process.stdout.write('Agent: ')
     
     try {
-      const stream = await agent.stream(message)
+      const stream = await agent.stream(await withTriggeredSkills(message))
       for await (const event of stream) {
         const text = getTextDelta(event)
         const toolName = getToolUseName(event)

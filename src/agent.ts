@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { execSync } from 'node:child_process'
 import { loadConfig } from './config'
+import { listSkills, readSkill } from './skills'
 
 function resolveWorkspacePath(filePath: string) {
   const workspaceRoot = process.cwd()
@@ -126,6 +127,31 @@ const calculator = tool({
   },
 })
 
+const skillLister = tool({
+  name: 'list_skills',
+  description: '列出当前项目可用的 skills',
+  inputSchema: z.object({}),
+  callback: async () => {
+    const skills = await listSkills()
+    return JSON.stringify(skills, null, 2)
+  },
+})
+
+const skillReader = tool({
+  name: 'read_skill',
+  description: '读取指定 skill 的 SKILL.md 内容',
+  inputSchema: z.object({
+    name: z.string().describe('skill 名称，例如 code-review'),
+  }),
+  callback: async ({ name }) => {
+    try {
+      return await readSkill(name)
+    } catch (err: any) {
+      return `读取 skill 失败: ${err.message}`
+    }
+  },
+})
+
 export function createAgent() {
   const config = loadConfig()
   const conversationManager = new SlidingWindowConversationManager({
@@ -143,8 +169,17 @@ export function createAgent() {
       },
     }),
     systemPrompt:
-      '你是一个 helpful assistant，请用中文回答。可以使用工具帮助用户。',
-    tools: [fileReader, fileWriter, shellTool, httpTool, calculator],
+      '你是一个 helpful assistant，请用中文回答。可以使用工具帮助用户。' +
+      '当用户使用 $skill-name 语法时，表示显式触发该 skill；若需要，也可以使用 list_skills/read_skill 查找并读取可用 skill。',
+    tools: [
+      fileReader,
+      fileWriter,
+      shellTool,
+      httpTool,
+      calculator,
+      skillLister,
+      skillReader,
+    ],
     conversationManager,
   })
 }

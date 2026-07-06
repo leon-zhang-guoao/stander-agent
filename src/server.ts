@@ -9,6 +9,7 @@ import {
   getToolUseName,
   isToolResultEvent,
 } from './agent'
+import { withTriggeredSkills } from './skills'
 
 const chatRequestSchema = z.object({
   message: z.string().min(1),
@@ -139,11 +140,12 @@ async function handleChat(req: IncomingMessage, res: ServerResponse) {
   const body = chatRequestSchema.parse(await readJson(req))
   const sessionId = body.sessionId ?? randomUUID()
   const session = getSession(sessionId)
+  const message = await withTriggeredSkills(body.message)
 
   const answer = await runExclusive(session, async () => {
     let text = ''
     const tools: string[] = []
-    const stream = await session.agent.stream(body.message)
+    const stream = await session.agent.stream(message)
 
     for await (const event of stream) {
       const textDelta = getTextDelta(event)
@@ -170,6 +172,7 @@ async function handleChatStream(req: IncomingMessage, res: ServerResponse) {
   const body = chatRequestSchema.parse(await readJson(req))
   const sessionId = body.sessionId ?? randomUUID()
   const session = getSession(sessionId)
+  const message = await withTriggeredSkills(body.message)
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
@@ -182,7 +185,7 @@ async function handleChatStream(req: IncomingMessage, res: ServerResponse) {
 
   await runExclusive(session, async () => {
     sendSse(res, 'session', { sessionId })
-    const stream = await session.agent.stream(body.message)
+    const stream = await session.agent.stream(message)
 
     for await (const event of stream) {
       const text = getTextDelta(event)

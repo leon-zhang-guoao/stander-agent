@@ -74,7 +74,7 @@ function ensureEmptyState() {
           <path d="M29 34h22M29 45h14" />
         </svg>
         <h2>开始对话</h2>
-        <p>点击左侧加号创建会话，然后直接提问。</p>
+        <p>点击左侧加号创建会话，然后直接提问。也可以用 $code-review 触发 skill。</p>
       </div>
     </div>
   `
