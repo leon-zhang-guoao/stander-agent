@@ -12,6 +12,8 @@ import type {
   UpdateAgentConfigInput,
 } from './types'
 
+export type EventListener = (sessionId: string, event: SessionEvent) => void
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -33,16 +35,18 @@ function cloneEvent(event: SessionEvent): SessionEvent {
   return { ...event }
 }
 
-export function createInMemoryPersistence(): Persistence {
+export function createInMemoryPersistence(options: { onEvent?: EventListener } = {}): Persistence {
   const agents = new Map<string, AgentConfig>()
   const sessions = new Map<string, SessionMeta>()
   const events = new Map<string, SessionEvent[]>()
 
   const eventLog: EventLog = {
     async append(sessionId, event) {
+      const storedEvent = cloneEvent(event)
       const existing = events.get(sessionId) ?? []
-      existing.push(cloneEvent(event))
+      existing.push(storedEvent)
       events.set(sessionId, existing)
+      options.onEvent?.(sessionId, cloneEvent(storedEvent))
     },
 
     async list(sessionId) {

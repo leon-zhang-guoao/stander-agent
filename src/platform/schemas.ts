@@ -18,3 +18,7 @@ export const patchAgentRequestSchema = createAgentRequestSchema.partial().refine
 export const createPlatformSessionRequestSchema = z.object({
   agentId: z.string().min(1),
 })
+
+export const postSessionMessageRequestSchema = z.object({
+  message: z.string().min(1),
+})

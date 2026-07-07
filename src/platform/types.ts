@@ -43,3 +43,8 @@ export type SessionEvent =
       updatedAt: string
     }
   | { type: 'session.error'; sessionId: string; message: string; createdAt: string }
+  | { type: 'user.message'; sessionId: string; text: string; createdAt: string }
+  | { type: 'agent.text_delta'; sessionId: string; text: string; createdAt: string }
+  | { type: 'agent.message'; sessionId: string; text: string; createdAt: string }
+  | { type: 'agent.tool_use'; sessionId: string; name: string; createdAt: string }
+  | { type: 'agent.tool_result'; sessionId: string; name?: string; createdAt: string }

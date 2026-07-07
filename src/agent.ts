@@ -19,7 +19,7 @@ function resolveWorkspacePath(filePath: string) {
   return resolvedPath
 }
 
-const fileReader = tool({
+export const fileReader = tool({
   name: 'read_file',
   description: '读取指定路径的文件内容',
   inputSchema: z.object({
@@ -37,7 +37,7 @@ const fileReader = tool({
   },
 })
 
-const fileWriter = tool({
+export const fileWriter = tool({
   name: 'write_file',
   description: '写入文本文件；会自动创建父目录，默认不覆盖已有文件',
   inputSchema: z.object({
@@ -68,7 +68,7 @@ const fileWriter = tool({
   },
 })
 
-const shellTool = tool({
+export const shellTool = tool({
   name: 'run_shell',
   description: '执行 shell 命令',
   inputSchema: z.object({
@@ -88,7 +88,7 @@ const shellTool = tool({
   },
 })
 
-const httpTool = tool({
+export const httpTool = tool({
   name: 'http_request',
   description: '发起 HTTP 请求',
   inputSchema: z.object({
@@ -111,7 +111,7 @@ const httpTool = tool({
   },
 })
 
-const calculator = tool({
+export const calculator = tool({
   name: 'calculator',
   description: '执行数学计算',
   inputSchema: z.object({
@@ -127,7 +127,7 @@ const calculator = tool({
   },
 })
 
-const skillLister = tool({
+export const skillLister = tool({
   name: 'list_skills',
   description: '列出当前项目可用的 skills',
   inputSchema: z.object({}),
@@ -137,7 +137,7 @@ const skillLister = tool({
   },
 })
 
-const skillReader = tool({
+export const skillReader = tool({
   name: 'read_skill',
   description: '读取指定 skill 的 SKILL.md 内容',
   inputSchema: z.object({
@@ -183,6 +183,16 @@ export function createAgent() {
     conversationManager,
   })
 }
+
+export const defaultTools = [
+  fileReader,
+  fileWriter,
+  shellTool,
+  httpTool,
+  calculator,
+  skillLister,
+  skillReader,
+]
 
 export function getText(content: ContentBlock[]) {
   return content

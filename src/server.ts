@@ -9,12 +9,16 @@ import {
   getToolUseName,
   isToolResultEvent,
 } from './agent'
+import { EventStreamHub } from './platform/event-stream-hub'
 import { createInMemoryPersistence } from './platform/in-memory-persistence'
 import {
   createAgentRequestSchema,
   createPlatformSessionRequestSchema,
   patchAgentRequestSchema,
+  postSessionMessageRequestSchema,
 } from './platform/schemas'
+import { StrandsRuntime } from './platform/strands-runtime'
+import type { SessionEvent } from './platform/types'
 import { withTriggeredSkills } from './skills'
 
 const chatRequestSchema = z.object({
@@ -34,8 +38,15 @@ type SessionState = {
   lastUsedAt: number
 }
 
+type PlatformSessionRun = Promise<void>
+
 const sessions = new Map<string, SessionState>()
-const platform = createInMemoryPersistence()
+const eventStreamHub = new EventStreamHub()
+const platform = createInMemoryPersistence({
+  onEvent: (sessionId, event) => eventStreamHub.publish(sessionId, event),
+})
+const runtime = new StrandsRuntime()
+const platformSessionRuns = new Map<string, PlatformSessionRun>()
 const publicDir = path.join(process.cwd(), 'public')
 const staticTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -85,6 +96,10 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown) {
 function sendSse(res: ServerResponse, event: string, data: unknown) {
   res.write(`event: ${event}\n`)
   res.write(`data: ${JSON.stringify(data)}\n\n`)
+}
+
+function sendSseComment(res: ServerResponse, comment: string) {
+  res.write(`: ${comment}\n\n`)
 }
 
 async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string) {
@@ -308,8 +323,29 @@ async function handlePlatformSessions(
     return true
   }
 
-  const sessionId = getRouteId(pathname, '/v1/sessions/')
-  if (!sessionId) {
+  const sessionPath = getSessionSubpath(pathname)
+  if (!sessionPath) {
+    return false
+  }
+
+  const { sessionId, suffix } = sessionPath
+
+  if (req.method === 'POST' && suffix === '/messages') {
+    await handlePostPlatformSessionMessage(req, res, sessionId)
+    return true
+  }
+
+  if (req.method === 'GET' && suffix === '/events') {
+    await handleListPlatformSessionEvents(res, sessionId)
+    return true
+  }
+
+  if (req.method === 'GET' && suffix === '/events/stream') {
+    await handleStreamPlatformSessionEvents(req, res, sessionId)
+    return true
+  }
+
+  if (suffix !== '') {
     return false
   }
 
@@ -331,11 +367,201 @@ async function handlePlatformSessions(
       return true
     }
 
+    runtime.deleteSession(sessionId)
+    eventStreamHub.closeSession(sessionId)
+    platformSessionRuns.delete(sessionId)
     sendJson(res, 200, { deleted: true })
     return true
   }
 
   return false
+}
+
+function getSessionSubpath(pathname: string) {
+  const prefix = '/v1/sessions/'
+  if (!pathname.startsWith(prefix)) {
+    return undefined
+  }
+
+  const rest = pathname.slice(prefix.length)
+  const slashIndex = rest.indexOf('/')
+  const rawSessionId = slashIndex === -1 ? rest : rest.slice(0, slashIndex)
+  const suffix = slashIndex === -1 ? '' : rest.slice(slashIndex)
+
+  if (!rawSessionId) {
+    return undefined
+  }
+
+  return {
+    sessionId: decodeURIComponent(rawSessionId),
+    suffix,
+  }
+}
+
+function createSessionEvent(event: SessionEvent) {
+  return event
+}
+
+function appendEvent(sessionId: string, event: SessionEvent) {
+  return platform.events.append(sessionId, createSessionEvent(event))
+}
+
+async function updatePlatformSessionStatus(
+  sessionId: string,
+  status: 'idle' | 'running' | 'error',
+  turnEvents?: SessionEvent[],
+) {
+  const session = await platform.sessions.updateStatus(sessionId, status)
+  if (session && turnEvents) {
+    turnEvents.push({
+      type: 'session.status_updated',
+      sessionId,
+      status,
+      updatedAt: session.updatedAt,
+    })
+  }
+
+  return session
+}
+
+async function handlePostPlatformSessionMessage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  sessionId: string,
+) {
+  const body = postSessionMessageRequestSchema.parse(await readJson(req))
+  const session = await platform.sessions.get(sessionId)
+  if (!session) {
+    sendJson(res, 404, { error: 'Session not found' })
+    return
+  }
+
+  const agent = await platform.agents.get(session.agentId)
+  if (!agent) {
+    sendJson(res, 404, { error: 'Agent not found' })
+    return
+  }
+
+  if (session.status === 'running' || platformSessionRuns.has(sessionId)) {
+    sendJson(res, 409, { error: 'Session is running' })
+    return
+  }
+
+  const turnEvents: SessionEvent[] = []
+  let answer = ''
+
+  const run = (async () => {
+    const userEvent: SessionEvent = {
+      type: 'user.message',
+      sessionId,
+      text: body.message,
+      createdAt: new Date().toISOString(),
+    }
+
+    turnEvents.push(userEvent)
+    await appendEvent(sessionId, userEvent)
+    const runningSession = await updatePlatformSessionStatus(sessionId, 'running', turnEvents)
+
+    try {
+      for await (const event of runtime.runMessage({
+        agent,
+        session: runningSession ?? session,
+        message: body.message,
+        events: await platform.events.list(sessionId),
+      })) {
+        turnEvents.push(event)
+        if (event.type === 'agent.text_delta') {
+          answer += event.text
+        }
+        await appendEvent(sessionId, event)
+      }
+
+      await updatePlatformSessionStatus(sessionId, 'idle', turnEvents)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const errorEvent: SessionEvent = {
+        type: 'session.error',
+        sessionId,
+        message,
+        createdAt: new Date().toISOString(),
+      }
+
+      turnEvents.push(errorEvent)
+      await appendEvent(sessionId, errorEvent)
+      await updatePlatformSessionStatus(sessionId, 'error', turnEvents)
+      throw error
+    }
+  })()
+
+  platformSessionRuns.set(sessionId, run)
+
+  try {
+    await run
+  } finally {
+    platformSessionRuns.delete(sessionId)
+  }
+
+  sendJson(res, 200, {
+    sessionId,
+    events: turnEvents,
+    answer,
+  })
+}
+
+async function handleListPlatformSessionEvents(res: ServerResponse, sessionId: string) {
+  const session = await platform.sessions.get(sessionId)
+  if (!session) {
+    sendJson(res, 404, { error: 'Session not found' })
+    return
+  }
+
+  sendJson(res, 200, await platform.events.list(sessionId))
+}
+
+async function handleStreamPlatformSessionEvents(
+  req: IncomingMessage,
+  res: ServerResponse,
+  sessionId: string,
+) {
+  const session = await platform.sessions.get(sessionId)
+  if (!session) {
+    sendJson(res, 404, { error: 'Session not found' })
+    return
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
+  })
+
+  const existingEvents = await platform.events.list(sessionId)
+  const keepalive = setInterval(() => {
+    sendSseComment(res, 'keepalive')
+  }, 15_000)
+
+  const unsubscribe = eventStreamHub.subscribe(sessionId, {
+    write(event) {
+      sendSse(res, 'session_event', event)
+    },
+    close() {
+      res.end()
+    },
+  })
+
+  for (const event of existingEvents) {
+    sendSse(res, 'session_event', event)
+  }
+
+  sendSse(res, 'ready', { sessionId })
+
+  req.on('close', () => {
+    clearInterval(keepalive)
+    unsubscribe()
+  })
 }
 
 async function handlePlatformRequest(
@@ -424,6 +650,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         'GET /v1/sessions',
         'GET /v1/sessions/:id',
         'DELETE /v1/sessions/:id',
+        'POST /v1/sessions/:id/messages',
+        'GET /v1/sessions/:id/events',
+        'GET /v1/sessions/:id/events/stream',
       ],
     })
   } catch (error) {
