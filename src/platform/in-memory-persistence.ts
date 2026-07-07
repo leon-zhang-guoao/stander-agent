@@ -1,15 +1,19 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentStore } from './agents-store'
 import type { EventLog } from './event-log'
+import type { ModelProviderStore } from './model-providers-store'
 import type { Persistence } from './persistence'
 import type { SessionStore } from './sessions-store'
 import type {
   AgentConfig,
   CreateAgentConfigInput,
+  CreateModelProviderInput,
+  ModelProviderConfig,
   SessionEvent,
   SessionMeta,
   SessionStatus,
   UpdateAgentConfigInput,
+  UpdateModelProviderInput,
 } from './types'
 
 export type EventListener = (sessionId: string, event: SessionEvent) => void
@@ -27,6 +31,14 @@ function cloneAgent(agent: AgentConfig): AgentConfig {
   }
 }
 
+function cloneModelProvider(provider: ModelProviderConfig): ModelProviderConfig {
+  return {
+    ...provider,
+    availableModels: provider.availableModels ? [...provider.availableModels] : undefined,
+    capabilities: { ...provider.capabilities },
+  }
+}
+
 function cloneSession(session: SessionMeta): SessionMeta {
   return { ...session }
 }
@@ -37,6 +49,7 @@ function cloneEvent(event: SessionEvent): SessionEvent {
 
 export function createInMemoryPersistence(options: { onEvent?: EventListener } = {}): Persistence {
   const agents = new Map<string, AgentConfig>()
+  const modelProviders = new Map<string, ModelProviderConfig>()
   const sessions = new Map<string, SessionMeta>()
   const events = new Map<string, SessionEvent[]>()
 
@@ -60,6 +73,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
       const agent: AgentConfig = {
         id: randomUUID(),
         name: input.name,
+        modelProviderId: input.modelProviderId,
         modelId: input.modelId,
         baseURL: input.baseURL,
         systemPrompt: input.systemPrompt,
@@ -92,6 +106,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
       const updated: AgentConfig = {
         ...existing,
         ...patch,
+        modelProviderId: patch.modelProviderId ?? existing.modelProviderId,
         tools: patch.tools ? [...patch.tools] : existing.tools,
         skills: patch.skills ? [...patch.skills] : existing.skills,
         mcpServers: patch.mcpServers ? [...patch.mcpServers] : existing.mcpServers,
@@ -104,6 +119,61 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
 
     async delete(id) {
       return agents.delete(id)
+    },
+  }
+
+  const modelProviderStore: ModelProviderStore = {
+    async create(input: CreateModelProviderInput) {
+      const timestamp = nowIso()
+      const provider: ModelProviderConfig = {
+        id: randomUUID(),
+        name: input.name,
+        type: input.type,
+        baseURL: input.baseURL,
+        apiKeyRef: input.apiKeyRef,
+        defaultModelId: input.defaultModelId,
+        availableModels: input.availableModels ? [...input.availableModels] : undefined,
+        capabilities: { ...input.capabilities },
+        enabled: input.enabled ?? true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+
+      modelProviders.set(provider.id, provider)
+      return cloneModelProvider(provider)
+    },
+
+    async list() {
+      return [...modelProviders.values()].map(cloneModelProvider)
+    },
+
+    async get(id) {
+      const provider = modelProviders.get(id)
+      return provider ? cloneModelProvider(provider) : undefined
+    },
+
+    async update(id, patch: UpdateModelProviderInput) {
+      const existing = modelProviders.get(id)
+      if (!existing) {
+        return undefined
+      }
+
+      const updated: ModelProviderConfig = {
+        ...existing,
+        ...patch,
+        capabilities: patch.capabilities ? { ...patch.capabilities } : existing.capabilities,
+        availableModels: patch.availableModels
+          ? [...patch.availableModels]
+          : existing.availableModels,
+        updatedAt: nowIso(),
+      }
+
+      modelProviders.set(id, updated)
+      return cloneModelProvider(updated)
+    },
+
+    async delete(id) {
+      return modelProviders.delete(id)
     },
   }
 
@@ -181,6 +251,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
 
   return {
     agents: agentStore,
+    modelProviders: modelProviderStore,
     sessions: sessionStore,
     events: eventLog,
   }

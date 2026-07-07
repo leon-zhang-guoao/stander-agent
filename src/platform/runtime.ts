@@ -1,7 +1,8 @@
-import type { AgentConfig, SessionEvent, SessionMeta } from './types'
+import type { AgentConfig, ModelProviderConfig, SessionEvent, SessionMeta } from './types'
 
 export type RunMessageInput = {
   agent: AgentConfig
+  modelProvider?: ModelProviderConfig
   session: SessionMeta
   message: string
   events: SessionEvent[]

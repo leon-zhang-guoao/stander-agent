@@ -1,29 +1,71 @@
 import { Agent, SlidingWindowConversationManager } from '@strands-agents/sdk'
 import { OpenAIModel } from '@strands-agents/sdk/models/openai'
 import {
-  defaultTools,
   getTextDelta,
   getToolUseName,
   isToolResultEvent,
 } from '../agent'
-import { withTriggeredSkills } from '../skills'
+import type { SkillRegistry } from './skill-registry'
 import type { AgentRuntime, RunMessageInput } from './runtime'
-import type { AgentConfig, SessionEvent } from './types'
+import type { AgentConfig, ModelProviderConfig, SessionEvent } from './types'
+import type { ToolRegistry } from './tool-registry'
 
 type RuntimeSessionState = {
   agent: Agent
-  agentUpdatedAt: string
+  cacheKey: string
 }
 
 function nowIso() {
   return new Date().toISOString()
 }
 
-function createStrandsAgent(config: AgentConfig) {
+function getProviderBaseURL(config: AgentConfig, provider?: ModelProviderConfig) {
+  return provider?.baseURL ?? config.baseURL
+}
+
+function getRuntimeCacheKey(config: AgentConfig, provider?: ModelProviderConfig) {
+  return [
+    config.updatedAt,
+    provider?.id ?? '',
+    provider?.updatedAt ?? '',
+    config.tools.join(','),
+    config.skills.join(','),
+  ].join('|')
+}
+
+function renderSkillContext(skills: { name: string; content: string }[]) {
+  if (!skills.length) {
+    return ''
+  }
+
+  return skills
+    .map(
+      (skill) => `## Skill: ${skill.name}
+
+${skill.content}`,
+    )
+    .join('\n\n---\n\n')
+}
+
+async function createStrandsAgent(
+  config: AgentConfig,
+  provider: ModelProviderConfig | undefined,
+  toolRegistry: ToolRegistry,
+  skillRegistry: SkillRegistry,
+) {
   const conversationManager = new SlidingWindowConversationManager({
     windowSize: 40,
     shouldTruncateResults: true,
   })
+  const assignedSkills = await skillRegistry.resolve(config.skills)
+  const skillContext = renderSkillContext(assignedSkills)
+  const systemPrompt = skillContext
+    ? `${config.systemPrompt}
+
+以下是这个 agent 默认启用的 skills，请持续遵循这些 skill 的说明。
+
+${skillContext}`
+    : config.systemPrompt
 
   return new Agent({
     model: new OpenAIModel({
@@ -31,11 +73,11 @@ function createStrandsAgent(config: AgentConfig) {
       modelId: config.modelId,
       apiKey: process.env.OPENAI_API_KEY ?? 'dummy-key',
       clientConfig: {
-        baseURL: config.baseURL,
+        baseURL: getProviderBaseURL(config, provider),
       },
     }),
-    systemPrompt: config.systemPrompt,
-    tools: defaultTools,
+    systemPrompt,
+    tools: toolRegistry.resolve(config.tools),
     conversationManager,
     printer: false,
   })
@@ -44,28 +86,54 @@ function createStrandsAgent(config: AgentConfig) {
 export class StrandsRuntime implements AgentRuntime {
   private sessions = new Map<string, RuntimeSessionState>()
 
+  constructor(
+    private readonly toolRegistry: ToolRegistry,
+    private readonly skillRegistry: SkillRegistry,
+  ) {}
+
   deleteSession(sessionId: string) {
     this.sessions.delete(sessionId)
   }
 
-  private getSessionAgent(agentConfig: AgentConfig, sessionId: string) {
+  private async getSessionAgent(
+    agentConfig: AgentConfig,
+    provider: ModelProviderConfig | undefined,
+    sessionId: string,
+  ) {
+    const cacheKey = getRuntimeCacheKey(agentConfig, provider)
     const existing = this.sessions.get(sessionId)
-    if (existing?.agentUpdatedAt === agentConfig.updatedAt) {
+    if (existing?.cacheKey === cacheKey) {
       return existing.agent
     }
 
-    const agent = createStrandsAgent(agentConfig)
+    const agent = await createStrandsAgent(
+      agentConfig,
+      provider,
+      this.toolRegistry,
+      this.skillRegistry,
+    )
     this.sessions.set(sessionId, {
       agent,
-      agentUpdatedAt: agentConfig.updatedAt,
+      cacheKey,
     })
 
     return agent
   }
 
   async *runMessage(input: RunMessageInput): AsyncIterable<SessionEvent> {
-    const agent = this.getSessionAgent(input.agent, input.session.id)
-    const message = await withTriggeredSkills(input.message)
+    const agent = await this.getSessionAgent(input.agent, input.modelProvider, input.session.id)
+    const triggeredSkills = await this.skillRegistry.resolveTriggered(input.message)
+    const triggeredContext = renderSkillContext(triggeredSkills)
+    const message = triggeredContext
+      ? `以下是本轮用户显式触发的 skill，请优先遵循这些 skill 的说明完成任务。
+
+${triggeredContext}
+
+---
+
+用户原始消息:
+${input.message}`
+      : input.message
     const stream = agent.stream(message, { cancelSignal: input.signal })
     let answer = ''
 

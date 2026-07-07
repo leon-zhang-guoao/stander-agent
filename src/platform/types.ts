@@ -1,6 +1,7 @@
 export type AgentConfig = {
   id: string
   name: string
+  modelProviderId?: string
   modelId: string
   baseURL: string
   systemPrompt: string
@@ -13,6 +14,7 @@ export type AgentConfig = {
 
 export type CreateAgentConfigInput = {
   name: string
+  modelProviderId?: string
   modelId: string
   baseURL: string
   systemPrompt: string
@@ -22,6 +24,49 @@ export type CreateAgentConfigInput = {
 }
 
 export type UpdateAgentConfigInput = Partial<CreateAgentConfigInput>
+
+export type ModelProviderType =
+  | 'openai-compatible'
+  | 'openai'
+  | 'anthropic'
+  | 'ollama'
+  | 'openrouter'
+  | 'custom'
+
+export type ModelProviderCapabilities = {
+  streaming: boolean
+  toolCalling: boolean
+  vision: boolean
+  jsonMode: boolean
+  reasoning: boolean
+}
+
+export type ModelProviderConfig = {
+  id: string
+  name: string
+  type: ModelProviderType
+  baseURL: string
+  apiKeyRef?: string
+  defaultModelId?: string
+  availableModels?: string[]
+  capabilities: ModelProviderCapabilities
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateModelProviderInput = {
+  name: string
+  type: ModelProviderType
+  baseURL: string
+  apiKeyRef?: string
+  defaultModelId?: string
+  availableModels?: string[]
+  capabilities: ModelProviderCapabilities
+  enabled?: boolean
+}
+
+export type UpdateModelProviderInput = Partial<CreateModelProviderInput>
 
 export type SessionStatus = 'idle' | 'running' | 'error'
 

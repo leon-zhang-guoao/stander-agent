@@ -13,12 +13,16 @@ import { EventStreamHub } from './platform/event-stream-hub'
 import { createInMemoryPersistence } from './platform/in-memory-persistence'
 import {
   createAgentRequestSchema,
+  createModelProviderRequestSchema,
   createPlatformSessionRequestSchema,
+  patchModelProviderRequestSchema,
   patchAgentRequestSchema,
   postSessionMessageRequestSchema,
 } from './platform/schemas'
+import { createFileSkillRegistry } from './platform/skill-registry'
 import { StrandsRuntime } from './platform/strands-runtime'
-import type { SessionEvent } from './platform/types'
+import { createBuiltinToolRegistry } from './platform/tool-registry'
+import type { CreateAgentConfigInput, SessionEvent, UpdateAgentConfigInput } from './platform/types'
 import { withTriggeredSkills } from './skills'
 
 const chatRequestSchema = z.object({
@@ -45,7 +49,9 @@ const eventStreamHub = new EventStreamHub()
 const platform = createInMemoryPersistence({
   onEvent: (sessionId, event) => eventStreamHub.publish(sessionId, event),
 })
-const runtime = new StrandsRuntime()
+const toolRegistry = createBuiltinToolRegistry()
+const skillRegistry = createFileSkillRegistry()
+const runtime = new StrandsRuntime(toolRegistry, skillRegistry)
 const platformSessionRuns = new Map<string, PlatformSessionRun>()
 const publicDir = path.join(process.cwd(), 'public')
 const staticTypes = new Map([
@@ -241,6 +247,202 @@ function getRouteId(pathname: string, prefix: string) {
   return decodeURIComponent(rawId)
 }
 
+async function validateAgentConfigInput(
+  input: CreateAgentConfigInput | UpdateAgentConfigInput,
+) {
+  if (input.modelProviderId) {
+    const provider = await platform.modelProviders.get(input.modelProviderId)
+    if (!provider) {
+      return 'Unknown model provider'
+    }
+  }
+
+  if (input.tools) {
+    const unknownTools = toolRegistry.unknown(input.tools)
+    if (unknownTools.length) {
+      return `Unknown tools: ${unknownTools.join(', ')}`
+    }
+  }
+
+  if (input.skills) {
+    const unknownSkills = await skillRegistry.unknown(input.skills)
+    if (unknownSkills.length) {
+      return `Unknown skills: ${unknownSkills.join(', ')}`
+    }
+  }
+
+  return undefined
+}
+
+async function handlePlatformModelProviders(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'POST' && pathname === '/v1/model-providers') {
+    const body = createModelProviderRequestSchema.parse(await readJson(req))
+    const provider = await platform.modelProviders.create(body)
+    sendJson(res, 201, provider)
+    return true
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/model-providers') {
+    sendJson(res, 200, await platform.modelProviders.list())
+    return true
+  }
+
+  const providerPath = getProviderSubpath(pathname)
+  if (!providerPath) {
+    return false
+  }
+
+  const { providerId, suffix } = providerPath
+
+  if (req.method === 'POST' && suffix === '/test') {
+    await handleTestModelProvider(res, providerId)
+    return true
+  }
+
+  if (suffix !== '') {
+    return false
+  }
+
+  if (req.method === 'GET') {
+    const provider = await platform.modelProviders.get(providerId)
+    if (!provider) {
+      sendJson(res, 404, { error: 'Model provider not found' })
+      return true
+    }
+
+    sendJson(res, 200, provider)
+    return true
+  }
+
+  if (req.method === 'PATCH') {
+    const body = patchModelProviderRequestSchema.parse(await readJson(req))
+    const provider = await platform.modelProviders.update(providerId, body)
+    if (!provider) {
+      sendJson(res, 404, { error: 'Model provider not found' })
+      return true
+    }
+
+    sendJson(res, 200, provider)
+    return true
+  }
+
+  if (req.method === 'DELETE') {
+    const deleted = await platform.modelProviders.delete(providerId)
+    if (!deleted) {
+      sendJson(res, 404, { error: 'Model provider not found' })
+      return true
+    }
+
+    sendJson(res, 200, { deleted: true })
+    return true
+  }
+
+  return false
+}
+
+function getProviderSubpath(pathname: string) {
+  const prefix = '/v1/model-providers/'
+  if (!pathname.startsWith(prefix)) {
+    return undefined
+  }
+
+  const rest = pathname.slice(prefix.length)
+  const slashIndex = rest.indexOf('/')
+  const rawProviderId = slashIndex === -1 ? rest : rest.slice(0, slashIndex)
+  const suffix = slashIndex === -1 ? '' : rest.slice(slashIndex)
+
+  if (!rawProviderId) {
+    return undefined
+  }
+
+  return {
+    providerId: decodeURIComponent(rawProviderId),
+    suffix,
+  }
+}
+
+async function handleTestModelProvider(res: ServerResponse, providerId: string) {
+  const provider = await platform.modelProviders.get(providerId)
+  if (!provider) {
+    sendJson(res, 404, { error: 'Model provider not found' })
+    return
+  }
+
+  if (provider.type !== 'openai-compatible') {
+    sendJson(res, 400, { error: 'Model provider type is not supported yet' })
+    return
+  }
+
+  const modelsUrl = new URL('models', provider.baseURL.endsWith('/') ? provider.baseURL : `${provider.baseURL}/`)
+
+  try {
+    const response = await fetch(modelsUrl, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? 'dummy-key'}`,
+      },
+    })
+    const json = await response.json().catch(() => undefined)
+
+    if (!response.ok) {
+      sendJson(res, 200, {
+        ok: false,
+        status: response.status,
+        error: json,
+      })
+      return
+    }
+
+    const data = Array.isArray(json?.data) ? json.data : []
+    sendJson(res, 200, {
+      ok: true,
+      status: response.status,
+      models: data.slice(0, 20).map((model: any) => ({
+        id: model.id,
+        ownedBy: model.owned_by,
+      })),
+    })
+  } catch (error) {
+    sendJson(res, 200, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+async function handlePlatformRegistries(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'GET' && pathname === '/v1/tools') {
+    sendJson(res, 200, toolRegistry.list())
+    return true
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/skills') {
+    sendJson(res, 200, await skillRegistry.list())
+    return true
+  }
+
+  const skillName = getRouteId(pathname, '/v1/skills/')
+  if (req.method === 'GET' && skillName) {
+    const skill = await skillRegistry.get(skillName)
+    if (!skill) {
+      sendJson(res, 404, { error: 'Skill not found' })
+      return true
+    }
+
+    sendJson(res, 200, skill)
+    return true
+  }
+
+  return false
+}
+
 async function handlePlatformAgents(
   req: IncomingMessage,
   res: ServerResponse,
@@ -248,6 +450,12 @@ async function handlePlatformAgents(
 ) {
   if (req.method === 'POST' && pathname === '/v1/agents') {
     const body = createAgentRequestSchema.parse(await readJson(req))
+    const validationError = await validateAgentConfigInput(body)
+    if (validationError) {
+      sendJson(res, 400, { error: validationError })
+      return true
+    }
+
     const agent = await platform.agents.create(body)
     sendJson(res, 201, agent)
     return true
@@ -276,6 +484,12 @@ async function handlePlatformAgents(
 
   if (req.method === 'PATCH') {
     const body = patchAgentRequestSchema.parse(await readJson(req))
+    const validationError = await validateAgentConfigInput(body)
+    if (validationError) {
+      sendJson(res, 400, { error: validationError })
+      return true
+    }
+
     const agent = await platform.agents.update(agentId, body)
     if (!agent) {
       sendJson(res, 404, { error: 'Agent not found' })
@@ -441,6 +655,29 @@ async function handlePostPlatformSessionMessage(
     sendJson(res, 404, { error: 'Agent not found' })
     return
   }
+  const modelProvider = agent.modelProviderId
+    ? await platform.modelProviders.get(agent.modelProviderId)
+    : undefined
+
+  if (agent.modelProviderId && !modelProvider) {
+    sendJson(res, 400, { error: 'Model provider not found' })
+    return
+  }
+
+  if (modelProvider && !modelProvider.enabled) {
+    sendJson(res, 400, { error: 'Model provider is disabled' })
+    return
+  }
+
+  if (modelProvider && modelProvider.type !== 'openai-compatible') {
+    sendJson(res, 400, { error: 'Model provider type is not supported yet' })
+    return
+  }
+
+  if (modelProvider && agent.tools.length && !modelProvider.capabilities.toolCalling) {
+    sendJson(res, 400, { error: 'Model provider does not support tool calling' })
+    return
+  }
 
   if (session.status === 'running' || platformSessionRuns.has(sessionId)) {
     sendJson(res, 409, { error: 'Session is running' })
@@ -465,6 +702,7 @@ async function handlePostPlatformSessionMessage(
     try {
       for await (const event of runtime.runMessage({
         agent,
+        modelProvider,
         session: runningSession ?? session,
         message: body.message,
         events: await platform.events.list(sessionId),
@@ -569,6 +807,14 @@ async function handlePlatformRequest(
   res: ServerResponse,
   pathname: string,
 ) {
+  if (await handlePlatformModelProviders(req, res, pathname)) {
+    return true
+  }
+
+  if (await handlePlatformRegistries(req, res, pathname)) {
+    return true
+  }
+
   if (await handlePlatformAgents(req, res, pathname)) {
     return true
   }
