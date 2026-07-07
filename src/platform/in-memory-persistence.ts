@@ -4,12 +4,15 @@ import type { EventLog } from './event-log'
 import type { McpServerStore } from './mcp-servers-store'
 import type { ModelProviderStore } from './model-providers-store'
 import type { Persistence } from './persistence'
+import type { SecretStore } from './secret-store'
 import type { SessionStore } from './sessions-store'
+import type { WorkflowStore } from './workflows-store'
 import type {
   AgentConfig,
   CreateAgentConfigInput,
   CreateMcpServerInput,
   CreateModelProviderInput,
+  CreateWorkflowInput,
   ModelProviderConfig,
   McpServerConfig,
   SessionEvent,
@@ -18,6 +21,8 @@ import type {
   UpdateAgentConfigInput,
   UpdateMcpServerInput,
   UpdateModelProviderInput,
+  UpdateWorkflowInput,
+  WorkflowDefinition,
 } from './types'
 
 export type EventListener = (sessionId: string, event: SessionEvent) => void
@@ -55,7 +60,10 @@ function sanitizeModelProvider(provider: ModelProviderConfig): ModelProviderConf
 }
 
 function cloneSession(session: SessionMeta): SessionMeta {
-  return { ...session }
+  return {
+    ...session,
+    meta: session.meta ? { ...session.meta } : undefined,
+  }
 }
 
 function cloneMcpServer(server: McpServerConfig): McpServerConfig {
@@ -71,12 +79,25 @@ function cloneEvent(event: SessionEvent): SessionEvent {
   return { ...event }
 }
 
+function cloneWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
+  return {
+    ...workflow,
+    nodes: workflow.nodes.map((node) => ({
+      ...node,
+      position: { ...node.position },
+    })),
+    edges: workflow.edges.map((edge) => ({ ...edge })),
+  }
+}
+
 export function createInMemoryPersistence(options: { onEvent?: EventListener } = {}): Persistence {
   const agents = new Map<string, AgentConfig>()
   const modelProviders = new Map<string, ModelProviderConfig>()
   const mcpServers = new Map<string, McpServerConfig>()
   const sessions = new Map<string, SessionMeta>()
   const events = new Map<string, SessionEvent[]>()
+  const secrets = new Map<string, string>()
+  const workflows = new Map<string, WorkflowDefinition>()
 
   const eventLog: EventLog = {
     async append(sessionId, event) {
@@ -211,6 +232,20 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
     },
   }
 
+  const secretStore: SecretStore = {
+    async put(ref, value) {
+      secrets.set(ref, value)
+    },
+
+    async get(ref) {
+      return secrets.get(ref)
+    },
+
+    async delete(ref) {
+      return secrets.delete(ref)
+    },
+  }
+
   const mcpServerStore: McpServerStore = {
     async create(input: CreateMcpServerInput) {
       const timestamp = nowIso()
@@ -272,7 +307,10 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
       const session: SessionMeta = {
         id: randomUUID(),
         agentId: input.agentId,
+        kind: input.kind ?? 'agent',
         status: 'idle',
+        title: input.title,
+        meta: input.meta ? { ...input.meta } : undefined,
         createdAt: timestamp,
         updatedAt: timestamp,
       }
@@ -338,11 +376,71 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
     },
   }
 
+  const workflowStore: WorkflowStore = {
+    async create(input: CreateWorkflowInput) {
+      const timestamp = nowIso()
+      const workflow: WorkflowDefinition = {
+        id: randomUUID(),
+        name: input.name,
+        description: input.description,
+        kind: input.kind,
+        nodes: input.nodes.map((node) => ({
+          ...node,
+          position: { ...node.position },
+        })),
+        edges: input.edges.map((edge) => ({ ...edge })),
+        startNodeId: input.startNodeId,
+        maxSteps: input.maxSteps,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+
+      workflows.set(workflow.id, workflow)
+      return cloneWorkflow(workflow)
+    },
+
+    async list() {
+      return [...workflows.values()].map(cloneWorkflow)
+    },
+
+    async get(id) {
+      const workflow = workflows.get(id)
+      return workflow ? cloneWorkflow(workflow) : undefined
+    },
+
+    async update(id, patch: UpdateWorkflowInput) {
+      const existing = workflows.get(id)
+      if (!existing) {
+        return undefined
+      }
+
+      const updated: WorkflowDefinition = {
+        ...existing,
+        ...patch,
+        nodes: patch.nodes
+          ? patch.nodes.map((node) => ({ ...node, position: { ...node.position } }))
+          : existing.nodes,
+        edges: patch.edges ? patch.edges.map((edge) => ({ ...edge })) : existing.edges,
+        updatedAt: nowIso(),
+      }
+
+      workflows.set(id, updated)
+      return cloneWorkflow(updated)
+    },
+
+    async delete(id) {
+      return workflows.delete(id)
+    },
+  }
+
   return {
+    mode: 'memory',
     agents: agentStore,
     modelProviders: modelProviderStore,
     mcpServers: mcpServerStore,
     sessions: sessionStore,
     events: eventLog,
+    secrets: secretStore,
+    workflows: workflowStore,
   }
 }

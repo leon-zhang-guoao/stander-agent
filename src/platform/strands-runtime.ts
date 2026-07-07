@@ -28,7 +28,13 @@ function getProviderBaseURL(config: AgentConfig, provider?: ModelProviderConfig)
 }
 
 function getProviderApiKey(provider?: ModelProviderConfig) {
-  return provider?.apiKey ?? process.env.OPENAI_API_KEY ?? 'dummy-key'
+  if (provider?.apiKey) {
+    return provider.apiKey
+  }
+  if (provider?.apiKeyRef) {
+    return process.env[provider.apiKeyRef] ?? process.env.OPENAI_API_KEY ?? ''
+  }
+  return process.env.OPENAI_API_KEY ?? ''
 }
 
 function getRuntimeCacheKey(
@@ -108,7 +114,7 @@ ${skillContext}`
     model: new OpenAIModel({
       api: 'chat',
       modelId: config.modelId,
-      apiKey: getProviderApiKey(provider),
+      apiKey: getProviderApiKey(provider) || 'missing-api-key',
       clientConfig: {
         baseURL: getProviderBaseURL(config, provider),
       },

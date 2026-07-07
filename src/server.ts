@@ -12,18 +12,22 @@ import {
   isToolResultEvent,
 } from './agent'
 import { EventStreamHub } from './platform/event-stream-hub'
-import { createInMemoryPersistence } from './platform/in-memory-persistence'
+import { LocalWorkspaceSandbox } from './platform/local-workspace-sandbox'
+import { createPlatformPersistence } from './platform/persistence-factory'
 import {
   createAgentRequestSchema,
   createModelProviderRequestSchema,
   createMcpServerRequestSchema,
   createPlatformSessionRequestSchema,
+  createWorkflowRequestSchema,
   graphRunRequestSchema,
   patchModelProviderRequestSchema,
   patchMcpServerRequestSchema,
   patchAgentRequestSchema,
+  patchWorkflowRequestSchema,
   postSessionMessageRequestSchema,
   swarmRunRequestSchema,
+  workflowRunRequestSchema,
 } from './platform/schemas'
 import { listMcpTools } from './platform/mcp-runtime'
 import { createFileSkillRegistry } from './platform/skill-registry'
@@ -34,8 +38,10 @@ import type {
   CreateAgentConfigInput,
   McpServerConfig,
   ModelProviderConfig,
+  MultiAgentMode,
   SessionEvent,
   UpdateAgentConfigInput,
+  WorkflowDefinition,
 } from './platform/types'
 import { withTriggeredSkills } from './skills'
 
@@ -58,10 +64,26 @@ type SessionState = {
 
 type PlatformSessionRun = Promise<void>
 
+type MultiAgentNodeResult = {
+  nodeId: string
+  status: string
+  output: string
+  error?: string
+}
+
+type MultiAgentSerializedResult = {
+  status: string
+  output: string
+  nodeResults: MultiAgentNodeResult[]
+}
+
 const sessions = new Map<string, SessionState>()
 const eventStreamHub = new EventStreamHub()
-const platform = createInMemoryPersistence({
+const platform = createPlatformPersistence({
   onEvent: (sessionId, event) => eventStreamHub.publish(sessionId, event),
+})
+const sandbox = new LocalWorkspaceSandbox({
+  workspaceRoot: process.env.STANDER_WORKSPACE_ROOT ?? process.cwd(),
 })
 const toolRegistry = createBuiltinToolRegistry()
 const skillRegistry = createFileSkillRegistry()
@@ -551,12 +573,21 @@ async function handleTestModelProvider(res: ServerResponse, providerId: string) 
     return
   }
 
+  const apiKey = getProviderApiKey(provider)
+  if (!apiKey) {
+    sendJson(res, 200, {
+      ok: false,
+      error: 'Model provider API key is not configured',
+    })
+    return
+  }
+
   const modelsUrl = new URL('models', provider.baseURL.endsWith('/') ? provider.baseURL : `${provider.baseURL}/`)
 
   try {
     const response = await fetch(modelsUrl, {
       headers: {
-        Authorization: `Bearer ${getProviderApiKey(provider)}`,
+        Authorization: `Bearer ${apiKey}`,
       },
     })
     const json = await response.json().catch(() => undefined)
@@ -588,8 +619,14 @@ async function handleTestModelProvider(res: ServerResponse, providerId: string) 
   }
 }
 
-function getProviderApiKey(provider: { apiKey?: string }) {
-  return provider.apiKey ?? process.env.OPENAI_API_KEY ?? 'dummy-key'
+function getProviderApiKey(provider?: { apiKey?: string; apiKeyRef?: string }) {
+  if (provider?.apiKey) {
+    return provider.apiKey
+  }
+  if (provider?.apiKeyRef) {
+    return process.env[provider.apiKeyRef] ?? process.env.OPENAI_API_KEY ?? ''
+  }
+  return process.env.OPENAI_API_KEY ?? ''
 }
 
 function getErrorCauseMessage(error: unknown) {
@@ -708,6 +745,162 @@ async function handlePlatformAgents(
   return false
 }
 
+async function handlePlatformWorkflows(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'POST' && pathname === '/v1/workflows') {
+    const body = createWorkflowRequestSchema.parse(await readJson(req))
+    const validationError = await validateWorkflowDefinition(body)
+    if (validationError) {
+      sendJson(res, 400, { error: validationError })
+      return true
+    }
+
+    const workflow = await platform.workflows.create(body)
+    sendJson(res, 201, workflow)
+    return true
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/workflows') {
+    sendJson(res, 200, await platform.workflows.list())
+    return true
+  }
+
+  const workflowPath = getResourceSubpath(pathname, '/v1/workflows/')
+  if (!workflowPath) {
+    return false
+  }
+
+  const { id: workflowId, suffix } = workflowPath
+
+  if (req.method === 'POST' && suffix === '/runs') {
+    await handleWorkflowRun(req, res, workflowId)
+    return true
+  }
+
+  if (suffix !== '') {
+    return false
+  }
+
+  if (req.method === 'GET') {
+    const workflow = await platform.workflows.get(workflowId)
+    if (!workflow) {
+      sendJson(res, 404, { error: 'Workflow not found' })
+      return true
+    }
+    sendJson(res, 200, workflow)
+    return true
+  }
+
+  if (req.method === 'PATCH') {
+    const patch = patchWorkflowRequestSchema.parse(await readJson(req))
+    const existing = await platform.workflows.get(workflowId)
+    if (!existing) {
+      sendJson(res, 404, { error: 'Workflow not found' })
+      return true
+    }
+
+    const merged: WorkflowDefinition = {
+      ...existing,
+      ...patch,
+      nodes: patch.nodes ?? existing.nodes,
+      edges: patch.edges ?? existing.edges,
+      updatedAt: existing.updatedAt,
+    }
+    const validationError = await validateWorkflowDefinition(merged)
+    if (validationError) {
+      sendJson(res, 400, { error: validationError })
+      return true
+    }
+
+    const workflow = await platform.workflows.update(workflowId, patch)
+    sendJson(res, 200, workflow)
+    return true
+  }
+
+  if (req.method === 'DELETE') {
+    const deleted = await platform.workflows.delete(workflowId)
+    if (!deleted) {
+      sendJson(res, 404, { error: 'Workflow not found' })
+      return true
+    }
+    sendJson(res, 200, { deleted: true })
+    return true
+  }
+
+  return false
+}
+
+async function handleWorkflowRun(
+  req: IncomingMessage,
+  res: ServerResponse,
+  workflowId: string,
+) {
+  const body = workflowRunRequestSchema.parse(await readJson(req))
+  const workflow = await platform.workflows.get(workflowId)
+  if (!workflow) {
+    sendJson(res, 404, { error: 'Workflow not found' })
+    return
+  }
+
+  const validationError = await validateWorkflowDefinition(workflow)
+  if (validationError) {
+    sendJson(res, 400, { error: validationError })
+    return
+  }
+
+  try {
+    const nodeAgentIds = workflow.nodes.map((node) => node.agentId)
+    const nodes = await resolveExperimentAgents(nodeAgentIds)
+    const nodeAgentIdByNodeId = new Map(workflow.nodes.map((node) => [node.id, node.agentId]))
+    const sessionAgentId =
+      workflow.kind === 'swarm'
+        ? nodeAgentIdByNodeId.get(workflow.startNodeId ?? '') ?? nodeAgentIds[0]
+        : nodeAgentIds[0]
+
+    const result = await runMultiAgentSession({
+      mode: workflow.kind,
+      input: body.input,
+      sessionAgentId,
+      nodeAgentIds,
+      nodes,
+      title: workflow.name,
+      meta: {
+        workflowId: workflow.id,
+        workflowKind: workflow.kind,
+      },
+      createRunner: async (resolvedNodes) => {
+        if (workflow.kind === 'graph') {
+          const graph = new Graph({
+            nodes: resolvedNodes,
+            edges: workflow.edges.map((edge) => [
+              nodeAgentIdByNodeId.get(edge.sourceNodeId) ?? edge.sourceNodeId,
+              nodeAgentIdByNodeId.get(edge.targetNodeId) ?? edge.targetNodeId,
+            ]),
+          })
+          return serializeMultiAgentResult(await graph.invoke(body.input))
+        }
+
+        const swarm = new Swarm({
+          nodes: resolvedNodes,
+          start: sessionAgentId,
+          maxSteps: workflow.maxSteps ?? 4,
+        })
+        return serializeMultiAgentResult(await swarm.invoke(body.input))
+      },
+    })
+
+    sendJson(res, 200, {
+      workflowId: workflow.id,
+      ...result,
+    })
+  } catch (error) {
+    sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
 async function resolveAgentRuntimeConfig(agent: AgentConfig) {
   const modelProvider = agent.modelProviderId
     ? await platform.modelProviders.getWithSecret(agent.modelProviderId)
@@ -737,6 +930,57 @@ function getDisabledMcpServers(servers: McpServerConfig[]) {
   return servers.filter((server) => !server.enabled)
 }
 
+async function validateWorkflowDefinition(workflow: {
+  kind: 'graph' | 'swarm'
+  nodes: Array<{ id: string; agentId: string }>
+  edges: Array<{ sourceNodeId: string; targetNodeId: string }>
+  startNodeId?: string
+}) {
+  const nodeIds = new Set<string>()
+  const duplicateNodeIds = new Set<string>()
+  for (const node of workflow.nodes) {
+    if (nodeIds.has(node.id)) {
+      duplicateNodeIds.add(node.id)
+    }
+    nodeIds.add(node.id)
+  }
+  if (duplicateNodeIds.size) {
+    return `Duplicate workflow node ids: ${[...duplicateNodeIds].join(', ')}`
+  }
+
+  const missingAgents: string[] = []
+  for (const node of workflow.nodes) {
+    if (!(await platform.agents.get(node.agentId))) {
+      missingAgents.push(node.agentId)
+    }
+  }
+  if (missingAgents.length) {
+    return `Unknown workflow node agents: ${[...new Set(missingAgents)].join(', ')}`
+  }
+
+  if (workflow.kind === 'graph') {
+    if (!workflow.edges.length) {
+      return 'Graph workflow requires at least one edge'
+    }
+    for (const edge of workflow.edges) {
+      if (!nodeIds.has(edge.sourceNodeId) || !nodeIds.has(edge.targetNodeId)) {
+        return 'Graph workflow edges must reference workflow node ids'
+      }
+    }
+  }
+
+  if (workflow.kind === 'swarm') {
+    if (!workflow.startNodeId) {
+      return 'Swarm workflow requires startNodeId'
+    }
+    if (!nodeIds.has(workflow.startNodeId)) {
+      return 'Swarm workflow startNodeId must reference a workflow node id'
+    }
+  }
+
+  return undefined
+}
+
 function ensureModelProviderUsable(
   agent: AgentConfig,
   modelProvider: ModelProviderConfig | undefined,
@@ -752,6 +996,10 @@ function ensureModelProviderUsable(
 
   if (modelProvider && modelProvider.type !== 'openai-compatible') {
     return 'Model provider type is not supported yet'
+  }
+
+  if (modelProvider && !getProviderApiKey(modelProvider)) {
+    return 'Model provider API key is not configured'
   }
 
   if (modelProvider && toolCount > 0 && !modelProvider.capabilities.toolCalling) {
@@ -794,7 +1042,7 @@ ${skillContext}`
     model: new OpenAIModel({
       api: 'chat',
       modelId: agent.modelId,
-      apiKey: getProviderApiKey(provider ?? {}),
+      apiKey: getProviderApiKey(provider) || 'missing-api-key',
       clientConfig: {
         baseURL: provider?.baseURL ?? agent.baseURL,
       },
@@ -855,6 +1103,178 @@ function serializeMultiAgentResult(result: {
   }
 }
 
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function createMultiAgentNodeEvents(
+  sessionId: string,
+  runId: string,
+  mode: MultiAgentMode,
+  nodeResults: MultiAgentNodeResult[],
+) {
+  return nodeResults.map(
+    (node): SessionEvent => ({
+      type: 'multi_agent.node_result',
+      sessionId,
+      runId,
+      mode,
+      nodeId: node.nodeId,
+      status: node.status,
+      output: node.output,
+      error: node.error,
+      createdAt: nowIso(),
+    }),
+  )
+}
+
+function isMultiAgentRunFailure(result: MultiAgentSerializedResult) {
+  return (
+    result.status.toLowerCase().includes('fail') ||
+    result.nodeResults.some((node) => node.status.toLowerCase().includes('fail') || node.error)
+  )
+}
+
+function getMultiAgentFailureMessage(result: MultiAgentSerializedResult) {
+  const nodeError = result.nodeResults.find((node) => node.error)
+  return nodeError?.error ?? `Multi-agent run failed with status: ${result.status}`
+}
+
+async function appendMultiAgentEvents(sessionId: string, events: SessionEvent[]) {
+  for (const event of events) {
+    await appendEvent(sessionId, event)
+  }
+}
+
+async function runMultiAgentSession({
+  mode,
+  input,
+  sessionAgentId,
+  nodeAgentIds,
+  nodes,
+  title,
+  meta,
+  createRunner,
+}: {
+  mode: MultiAgentMode
+  input: string
+  sessionAgentId: string
+  nodeAgentIds: string[]
+  nodes: Agent[]
+  title?: string
+  meta?: Record<string, unknown>
+  createRunner: (nodes: Agent[]) => Promise<MultiAgentSerializedResult>
+}) {
+  const runId = randomUUID()
+  const session = await platform.sessions.create({
+    agentId: sessionAgentId,
+    kind: mode,
+    title: title ?? `${mode === 'graph' ? 'Graph' : 'Swarm'} run`,
+    meta: {
+      ...meta,
+      runId,
+      mode,
+      nodeAgentIds,
+    },
+  })
+  const events: SessionEvent[] = []
+  const pushEvent = async (event: SessionEvent) => {
+    events.push(event)
+    await appendEvent(session.id, event)
+  }
+
+  await pushEvent({
+    type: 'multi_agent.run_started',
+    sessionId: session.id,
+    runId,
+    mode,
+    input,
+    nodeAgentIds: [...nodeAgentIds],
+    createdAt: nowIso(),
+  })
+  await updatePlatformSessionStatus(session.id, 'running', events)
+
+  try {
+    const result = await createRunner(nodes)
+    const nodeEvents = createMultiAgentNodeEvents(session.id, runId, mode, result.nodeResults)
+    events.push(...nodeEvents)
+    await appendMultiAgentEvents(session.id, nodeEvents)
+    if (isMultiAgentRunFailure(result)) {
+      const message = getMultiAgentFailureMessage(result)
+      await pushEvent({
+        type: 'multi_agent.run_failed',
+        sessionId: session.id,
+        runId,
+        mode,
+        message,
+        createdAt: nowIso(),
+      })
+      const errorEvent: SessionEvent = {
+        type: 'session.error',
+        sessionId: session.id,
+        message,
+        createdAt: nowIso(),
+      }
+      events.push(errorEvent)
+      await appendEvent(session.id, errorEvent)
+      await updatePlatformSessionStatus(session.id, 'error', events)
+
+      return {
+        sessionId: session.id,
+        runId,
+        ...result,
+        events,
+      }
+    }
+
+    await pushEvent({
+      type: 'multi_agent.run_completed',
+      sessionId: session.id,
+      runId,
+      mode,
+      status: result.status,
+      output: result.output,
+      createdAt: nowIso(),
+    })
+    await updatePlatformSessionStatus(session.id, 'idle', events)
+
+    return {
+      sessionId: session.id,
+      runId,
+      ...result,
+      events,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await pushEvent({
+      type: 'multi_agent.run_failed',
+      sessionId: session.id,
+      runId,
+      mode,
+      message,
+      createdAt: nowIso(),
+    })
+    const errorEvent: SessionEvent = {
+      type: 'session.error',
+      sessionId: session.id,
+      message,
+      createdAt: nowIso(),
+    }
+    events.push(errorEvent)
+    await appendEvent(session.id, errorEvent)
+    await updatePlatformSessionStatus(session.id, 'error', events)
+
+    return {
+      sessionId: session.id,
+      runId,
+      status: 'error',
+      output: '',
+      nodeResults: [],
+      events,
+    }
+  }
+}
+
 async function handlePlatformMultiAgent(
   req: IncomingMessage,
   res: ServerResponse,
@@ -872,12 +1292,21 @@ async function handlePlatformMultiAgent(
 
     try {
       const nodes = await resolveExperimentAgents(body.nodeAgentIds)
-      const graph = new Graph({
+      const result = await runMultiAgentSession({
+        mode: 'graph',
+        input: body.input,
+        sessionAgentId: body.nodeAgentIds[0],
+        nodeAgentIds: body.nodeAgentIds,
         nodes,
-        edges: body.edges,
+        createRunner: async (resolvedNodes) => {
+          const graph = new Graph({
+            nodes: resolvedNodes,
+            edges: body.edges,
+          })
+          return serializeMultiAgentResult(await graph.invoke(body.input))
+        },
       })
-      const result = await graph.invoke(body.input)
-      sendJson(res, 200, serializeMultiAgentResult(result))
+      sendJson(res, 200, result)
     } catch (error) {
       sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -893,13 +1322,22 @@ async function handlePlatformMultiAgent(
 
     try {
       const nodes = await resolveExperimentAgents(body.nodeAgentIds)
-      const swarm = new Swarm({
+      const result = await runMultiAgentSession({
+        mode: 'swarm',
+        input: body.input,
+        sessionAgentId: body.startAgentId,
+        nodeAgentIds: body.nodeAgentIds,
         nodes,
-        start: body.startAgentId,
-        maxSteps: body.maxSteps ?? 4,
+        createRunner: async (resolvedNodes) => {
+          const swarm = new Swarm({
+            nodes: resolvedNodes,
+            start: body.startAgentId,
+            maxSteps: body.maxSteps ?? 4,
+          })
+          return serializeMultiAgentResult(await swarm.invoke(body.input))
+        },
       })
-      const result = await swarm.invoke(body.input)
-      sendJson(res, 200, serializeMultiAgentResult(result))
+      sendJson(res, 200, result)
     } catch (error) {
       sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
     }
@@ -1059,6 +1497,11 @@ async function handlePostPlatformSessionMessage(
   const session = await platform.sessions.get(sessionId)
   if (!session) {
     sendJson(res, 404, { error: 'Session not found' })
+    return
+  }
+
+  if (session.kind !== 'agent') {
+    sendJson(res, 400, { error: 'Session does not accept direct messages' })
     return
   }
 
@@ -1244,6 +1687,11 @@ async function handlePlatformRequest(
   res: ServerResponse,
   pathname: string,
 ) {
+  if (req.method === 'GET' && pathname === '/v1/platform/status') {
+    sendJson(res, 200, getPlatformStatus())
+    return true
+  }
+
   if (await handlePlatformModelProviders(req, res, pathname)) {
     return true
   }
@@ -1260,6 +1708,10 @@ async function handlePlatformRequest(
     return true
   }
 
+  if (await handlePlatformWorkflows(req, res, pathname)) {
+    return true
+  }
+
   if (await handlePlatformSessions(req, res, pathname)) {
     return true
   }
@@ -1269,6 +1721,18 @@ async function handlePlatformRequest(
   }
 
   return false
+}
+
+function getPlatformStatus() {
+  return {
+    persistence: platform.mode,
+    dataDir: platform.dataDir,
+    database: platform.databasePath,
+    sandbox: {
+      type: 'local-workspace',
+      workspaceRoot: sandbox.workspaceRoot,
+    },
+  }
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
@@ -1284,6 +1748,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
       sendJson(res, 200, {
         ok: true,
         sessions: sessions.size,
+        platform: getPlatformStatus(),
       })
       return
     }
@@ -1363,6 +1828,6 @@ const host = process.env.HOST ?? '0.0.0.0'
 createServer(handleRequest).listen(port, host, () => {
   console.log(`Agent HTTP server listening on http://${host}:${port}`)
   console.log(
-    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions, /v1/model-providers, /v1/mcp-servers, /v1/multi-agent/*',
+    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions, /v1/model-providers, /v1/mcp-servers, /v1/workflows, /v1/multi-agent/*',
   )
 })

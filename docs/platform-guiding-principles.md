@@ -473,7 +473,7 @@ Rules:
 
 ## Multi-Agent Plan
 
-Use Strands multi-agent capabilities in two stages: agents-as-tools can participate in normal platform sessions, while Graph and Swarm remain experiment APIs until their event model is designed.
+Use Strands multi-agent capabilities in staged layers: agents-as-tools can participate in normal platform sessions; Graph and Swarm first enter as experiment APIs, then become sessionized runs once their event model is stable.
 
 Supported M5 patterns:
 
@@ -481,7 +481,7 @@ Supported M5 patterns:
 - Graph: deterministic workflows such as analyze -> implement -> test -> review through `/v1/multi-agent/graph/runs`.
 - Swarm: dynamic handoff between agents through `/v1/multi-agent/swarm/runs`.
 
-Graph and Swarm runs do not create platform sessions, do not write the event log, and do not provide SSE in M5. They use each node agent's model, provider, system prompt, and skills, but avoid tools/MCP/agentTools to reduce side effects while the trajectory contract is still experimental.
+M5 introduced Graph and Swarm as experiment APIs. M7 sessionizes those runs: each run creates a platform session, writes `multi_agent.*` events to the append-only event log, and can be inspected through the existing session events API and Console timeline. M8 adds reusable workflow definitions and a visual builder while keeping runs mapped back to session truth. Node agents still use only their model, provider, system prompt, and skills; they avoid tools/MCP/agentTools to reduce side effects while the trajectory contract matures.
 
 ## Milestones
 
@@ -535,10 +535,36 @@ Graph and Swarm runs do not create platform sessions, do not write the event log
 
 ### M6: Deferred Infrastructure
 
-- Implement persistence behind `Persistence`
-- Implement sandbox behind `Sandbox`
-- Add recovery/replay from event log
-- Add stronger security boundaries
+- Add SQLite persistence behind `Persistence`
+- Add local provider API key storage behind `SecretStore`
+- Add `GET /v1/platform/status`
+- Add `Sandbox` and `LocalWorkspaceSandbox`
+- Recover sessions and event timelines after server restart
+- Keep Graph/Swarm visual builder deferred
+
+### M7: Sessionized Multi-Agent Runs
+
+- Add `SessionKind` for `agent`, `graph`, and `swarm`
+- Persist Graph/Swarm runs as platform sessions
+- Add `multi_agent.run_started`, `multi_agent.node_result`, `multi_agent.run_completed`, and `multi_agent.run_failed`
+- Recover multi-agent timelines from SQLite event log
+- Add Console `Runs` tab for simple Graph/Swarm forms
+- Keep Graph/Swarm visual builder and reusable workflow persistence deferred to M8+
+
+### M8: Visual Multi-Agent Builder
+
+- Add `WorkflowDefinition` and `WorkflowStore`
+- Add `/v1/workflows` CRUD and `/v1/workflows/:id/runs`
+- Save reusable Graph/Swarm workflow definitions
+- Add Console visual workflow builder with draggable nodes and Graph edges
+- Map workflow runs back to sessions and timeline events
+- Keep node-level live streaming, templates, and import/export deferred to M9+
+
+### M9: Workflow Operations
+
+- Decide whether node-level live streaming becomes part of the platform event contract
+- Add workflow templates and import/export
+- Add workflow run history filters and stronger governance
 
 ## Non-Goals for the First Platform Version
 

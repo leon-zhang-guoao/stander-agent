@@ -14,6 +14,7 @@
           <div>
             <h1>Stander Console</h1>
             <p id="connectionLabel">正在连接平台</p>
+            <p id="platformStatusLabel">persistence: unknown</p>
           </div>
         </header>
 
@@ -21,6 +22,7 @@
           <button class="nav-tab" type="button" data-tab="providers">Providers</button>
           <button class="nav-tab" type="button" data-tab="mcp">MCP</button>
           <button class="nav-tab" type="button" data-tab="agents">Agents</button>
+          <button class="nav-tab" type="button" data-tab="runs">Workflows</button>
           <button class="nav-tab" type="button" data-tab="registries">Tools / Skills</button>
         </nav>
 
@@ -111,7 +113,7 @@
             <label>
               API Key
               <input id="providerApiKey" name="apiKey" type="password" autocomplete="new-password" placeholder="留空表示不修改已保存 key" />
-              <span id="providerApiKeyHint" class="field-hint">仅保存在当前服务进程的内存里，接口不会回传明文。</span>
+              <span id="providerApiKeyHint" class="field-hint">保存为本地 secret，接口不会回传明文。</span>
             </label>
             <fieldset>
               <legend>Capabilities</legend>
@@ -246,6 +248,76 @@
               <button id="deleteAgentButton" class="danger-button" type="button">删除</button>
             </div>
           </form>
+        </section>
+
+        <section id="runsPanel" class="panel" data-panel="runs" hidden>
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Workflow Builder</p>
+              <h2>可视化编排</h2>
+            </div>
+            <button id="newWorkflowButton" class="small-button" type="button">新建</button>
+          </div>
+          <div id="workflowsList" class="entity-list"></div>
+          <form id="workflowForm" class="config-form">
+            <input id="workflowId" type="hidden" />
+            <label>
+              名称
+              <input id="workflowName" type="text" required />
+            </label>
+            <label>
+              描述
+              <textarea id="workflowDescription" rows="2"></textarea>
+            </label>
+            <label>
+              类型
+              <select id="workflowKind">
+                <option value="graph">Graph</option>
+                <option value="swarm">Swarm</option>
+              </select>
+            </label>
+            <div class="workflow-toolbar">
+              <button id="addWorkflowNodeButton" class="secondary-button" type="button">添加节点</button>
+              <button id="connectWorkflowNodeButton" class="secondary-button" type="button">辅助连接</button>
+              <button id="deleteWorkflowNodeButton" class="danger-button" type="button">删除节点</button>
+            </div>
+            <div id="workflowCanvas" class="workflow-canvas" aria-label="Workflow builder">
+              <svg id="workflowEdges" class="workflow-edges" aria-hidden="true"></svg>
+              <div id="workflowNodes" class="workflow-nodes"></div>
+            </div>
+            <fieldset>
+              <legend>当前节点</legend>
+              <label>
+                Agent
+                <select id="workflowNodeAgent"></select>
+              </label>
+              <label>
+                Label
+                <input id="workflowNodeLabel" type="text" placeholder="留空使用 agent 名称" />
+              </label>
+            </fieldset>
+            <label id="workflowStartNodeLabel">
+              Swarm Start Node
+              <select id="workflowStartNode"></select>
+            </label>
+            <label>
+              Max Steps
+              <input id="workflowMaxSteps" type="number" min="1" max="20" value="4" />
+            </label>
+            <div class="form-actions">
+              <button type="submit">保存 workflow</button>
+              <button id="duplicateWorkflowButton" class="secondary-button" type="button">复制</button>
+              <button id="deleteWorkflowButton" class="danger-button" type="button">删除</button>
+            </div>
+          </form>
+          <form id="workflowRunForm" class="config-form">
+            <label>
+              Run Input
+              <textarea id="workflowRunInput" rows="4" placeholder="输入这次 workflow run 的任务"></textarea>
+            </label>
+            <button type="submit">运行 workflow</button>
+          </form>
+          <pre id="runResult" class="result-box" hidden></pre>
         </section>
 
         <section id="registriesPanel" class="panel" data-panel="registries" hidden>

@@ -104,3 +104,38 @@ export const swarmRunRequestSchema = z.object({
   startAgentId: z.string().min(1),
   maxSteps: z.number().int().positive().optional(),
 })
+
+const workflowNodeSchema = z.object({
+  id: z.string().min(1),
+  agentId: z.string().min(1),
+  label: z.string().optional(),
+  position: z.object({
+    x: z.number(),
+    y: z.number(),
+  }),
+})
+
+const workflowEdgeSchema = z.object({
+  id: z.string().min(1),
+  sourceNodeId: z.string().min(1),
+  targetNodeId: z.string().min(1),
+})
+
+export const createWorkflowRequestSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  kind: z.enum(['graph', 'swarm']),
+  nodes: z.array(workflowNodeSchema).min(1),
+  edges: z.array(workflowEdgeSchema),
+  startNodeId: z.string().min(1).optional(),
+  maxSteps: z.number().int().positive().optional(),
+})
+
+export const patchWorkflowRequestSchema = createWorkflowRequestSchema.partial().refine(
+  (patch) => Object.keys(patch).length > 0,
+  { message: 'Patch body must contain at least one field' },
+)
+
+export const workflowRunRequestSchema = z.object({
+  input: z.string().min(1),
+})

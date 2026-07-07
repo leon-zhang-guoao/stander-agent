@@ -105,14 +105,70 @@ export type CreateMcpServerInput = {
 export type UpdateMcpServerInput = Partial<CreateMcpServerInput>
 
 export type SessionStatus = 'idle' | 'running' | 'error'
+export type SessionKind = 'agent' | 'graph' | 'swarm'
 
 export type SessionMeta = {
   id: string
   agentId: string
+  kind: SessionKind
   status: SessionStatus
+  title?: string
+  meta?: Record<string, unknown>
   createdAt: string
   updatedAt: string
 }
+
+export type CreateSessionInput = {
+  agentId: string
+  kind?: SessionKind
+  title?: string
+  meta?: Record<string, unknown>
+}
+
+export type MultiAgentMode = 'graph' | 'swarm'
+
+export type WorkflowKind = 'graph' | 'swarm'
+
+export type WorkflowNode = {
+  id: string
+  agentId: string
+  label?: string
+  position: {
+    x: number
+    y: number
+  }
+}
+
+export type WorkflowEdge = {
+  id: string
+  sourceNodeId: string
+  targetNodeId: string
+}
+
+export type WorkflowDefinition = {
+  id: string
+  name: string
+  description?: string
+  kind: WorkflowKind
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+  startNodeId?: string
+  maxSteps?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateWorkflowInput = {
+  name: string
+  description?: string
+  kind: WorkflowKind
+  nodes: WorkflowNode[]
+  edges: WorkflowEdge[]
+  startNodeId?: string
+  maxSteps?: number
+}
+
+export type UpdateWorkflowInput = Partial<CreateWorkflowInput>
 
 export type SessionEvent =
   | { type: 'session.created'; sessionId: string; agentId: string; createdAt: string }
@@ -129,3 +185,40 @@ export type SessionEvent =
   | { type: 'agent.message'; sessionId: string; text: string; createdAt: string }
   | { type: 'agent.tool_use'; sessionId: string; name: string; createdAt: string }
   | { type: 'agent.tool_result'; sessionId: string; name?: string; createdAt: string }
+  | {
+      type: 'multi_agent.run_started'
+      sessionId: string
+      runId: string
+      mode: MultiAgentMode
+      input: string
+      nodeAgentIds: string[]
+      createdAt: string
+    }
+  | {
+      type: 'multi_agent.node_result'
+      sessionId: string
+      runId: string
+      mode: MultiAgentMode
+      nodeId: string
+      status: string
+      output: string
+      error?: string
+      createdAt: string
+    }
+  | {
+      type: 'multi_agent.run_completed'
+      sessionId: string
+      runId: string
+      mode: MultiAgentMode
+      status: string
+      output: string
+      createdAt: string
+    }
+  | {
+      type: 'multi_agent.run_failed'
+      sessionId: string
+      runId: string
+      mode: MultiAgentMode
+      message: string
+      createdAt: string
+    }
