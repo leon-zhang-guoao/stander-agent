@@ -134,6 +134,7 @@ type AgentConfig = {
   tools: string[]
   skills: string[]
   mcpServers?: string[]
+  agentTools?: string[]
   createdAt: string
   updatedAt: string
 }
@@ -177,7 +178,7 @@ type ModelProviderConfig = {
 
 Rules:
 
-- Store credential references, not raw API keys, in `ModelProviderConfig`.
+- Store raw API keys only in the local in-memory provider store for development. Public provider reads should expose only `hasApiKey`, and future durable storage should move secrets behind a vault.
 - Keep `config.json` as the local fallback for the legacy `/chat` routes until the platform path replaces them.
 - Let each `AgentConfig` select `modelProviderId` and `modelId`; if `modelId` is omitted in a future version, use the provider's `defaultModelId`.
 - Validate provider compatibility at runtime. For example, an agent that uses tools should warn or fail fast when the selected provider has `toolCalling: false`.
@@ -244,6 +245,17 @@ GET    /v1/model-providers/:id
 PATCH  /v1/model-providers/:id
 DELETE /v1/model-providers/:id
 POST   /v1/model-providers/:id/test
+
+POST   /v1/mcp-servers
+GET    /v1/mcp-servers
+GET    /v1/mcp-servers/:id
+PATCH  /v1/mcp-servers/:id
+DELETE /v1/mcp-servers/:id
+POST   /v1/mcp-servers/:id/test
+GET    /v1/mcp-servers/:id/tools
+
+POST   /v1/multi-agent/graph/runs
+POST   /v1/multi-agent/swarm/runs
 ```
 
 The existing `/chat` and `/chat/stream` routes may remain temporarily as compatibility wrappers, but the platform path should be session-based.
@@ -267,7 +279,7 @@ Future implementation:
 - Add model discovery when the provider exposes a models endpoint.
 - Add per-provider defaults such as timeout, headers, rate-limit labels, and organization/project identifiers.
 
-Do not put raw provider credentials into agent configs, session events, or exported trajectories.
+Do not put raw provider credentials into agent configs, session events, exported trajectories, or API responses that list/read providers.
 
 ## Tool Registry
 
@@ -428,36 +440,48 @@ CloudflareSandbox
 
 Sandbox is intentionally deferred. The platform should call the sandbox port from tools, not call `fs` or `child_process` directly everywhere.
 
-## MCP Plan
+## MCP Registry
 
-MCP should be a second-stage platform feature.
+MCP is a platform registry concern. Agent configs reference MCP server ids; the runtime adapter resolves enabled servers, creates `McpClient` instances, and adds those clients to the Strands tools list for the session runtime.
 
-Agent config can eventually include MCP servers:
+M5 supports a minimal local-development registry:
 
 ```ts
 type McpServerConfig = {
   id: string
   name: string
-  transport: 'stdio' | 'http'
+  transport: 'stdio' | 'streamable-http'
   command?: string
   args?: string[]
+  env?: Record<string, string>
+  cwd?: string
   url?: string
+  headers?: Record<string, string>
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
 }
 ```
 
-The runtime adapter can create `McpClient` instances and include them in the Strands tools list.
+Rules:
+
+- `/v1/mcp-servers/:id/test` creates a temporary MCP client, calls `listTools()`, and disconnects.
+- `/v1/mcp-servers/:id/tools` returns live tool summaries and does not cache them into durable state.
+- Disabled or missing MCP servers fail fast before session message execution.
+- MCP credentials should be expressed through local environment/config during M5; do not write raw secrets into session events.
+- Stdio MCP commands run locally in M5 and are not sandboxed yet.
 
 ## Multi-Agent Plan
 
-Use Strands multi-agent capabilities after the core platform is stable.
+Use Strands multi-agent capabilities in two stages: agents-as-tools can participate in normal platform sessions, while Graph and Swarm remain experiment APIs until their event model is designed.
 
-Possible patterns:
+Supported M5 patterns:
 
-- agents-as-tools: orchestrator delegates to specialized agents
-- Graph: deterministic workflows such as analyze -> implement -> test -> review
-- Swarm: dynamic handoff between agents
+- agents-as-tools: an orchestrator agent can expose selected child agents as callable tools through `agentTools`.
+- Graph: deterministic workflows such as analyze -> implement -> test -> review through `/v1/multi-agent/graph/runs`.
+- Swarm: dynamic handoff between agents through `/v1/multi-agent/swarm/runs`.
 
-Do not start here. Multi-agent orchestration depends on clean agents, sessions, events, and tools.
+Graph and Swarm runs do not create platform sessions, do not write the event log, and do not provide SSE in M5. They use each node agent's model, provider, system prompt, and skills, but avoid tools/MCP/agentTools to reduce side effects while the trajectory contract is still experimental.
 
 ## Milestones
 
@@ -502,10 +526,12 @@ Do not start here. Multi-agent orchestration depends on clean agents, sessions, 
 
 ### M5: MCP and Multi-Agent
 
-- Add MCP server config
-- Add MCP client creation
-- Add agents-as-tools experiment
-- Add Graph/Swarm experiment
+- Add `McpServerStore`
+- Add `/v1/mcp-servers` CRUD, `/test`, and live `/tools`
+- Allow agents to select MCP server ids
+- Add `agentTools` for agents-as-tools delegation
+- Add Graph/Swarm experiment run endpoints
+- Add Console MCP registry and agent selection controls
 
 ### M6: Deferred Infrastructure
 

@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { Agent, Graph, Swarm, type ContentBlock } from '@strands-agents/sdk'
+import { OpenAIModel } from '@strands-agents/sdk/models/openai'
 import { z } from 'zod'
 import {
   createAgent,
@@ -14,15 +16,27 @@ import { createInMemoryPersistence } from './platform/in-memory-persistence'
 import {
   createAgentRequestSchema,
   createModelProviderRequestSchema,
+  createMcpServerRequestSchema,
   createPlatformSessionRequestSchema,
+  graphRunRequestSchema,
   patchModelProviderRequestSchema,
+  patchMcpServerRequestSchema,
   patchAgentRequestSchema,
   postSessionMessageRequestSchema,
+  swarmRunRequestSchema,
 } from './platform/schemas'
+import { listMcpTools } from './platform/mcp-runtime'
 import { createFileSkillRegistry } from './platform/skill-registry'
 import { StrandsRuntime } from './platform/strands-runtime'
 import { createBuiltinToolRegistry } from './platform/tool-registry'
-import type { CreateAgentConfigInput, SessionEvent, UpdateAgentConfigInput } from './platform/types'
+import type {
+  AgentConfig,
+  CreateAgentConfigInput,
+  McpServerConfig,
+  ModelProviderConfig,
+  SessionEvent,
+  UpdateAgentConfigInput,
+} from './platform/types'
 import { withTriggeredSkills } from './skills'
 
 const chatRequestSchema = z.object({
@@ -51,7 +65,7 @@ const platform = createInMemoryPersistence({
 })
 const toolRegistry = createBuiltinToolRegistry()
 const skillRegistry = createFileSkillRegistry()
-const runtime = new StrandsRuntime(toolRegistry, skillRegistry)
+const runtime = new StrandsRuntime(toolRegistry, skillRegistry, platform)
 const platformSessionRuns = new Map<string, PlatformSessionRun>()
 const publicDir = path.join(process.cwd(), 'public')
 const staticTypes = new Map([
@@ -247,8 +261,29 @@ function getRouteId(pathname: string, prefix: string) {
   return decodeURIComponent(rawId)
 }
 
+function getResourceSubpath(pathname: string, prefix: string) {
+  if (!pathname.startsWith(prefix)) {
+    return undefined
+  }
+
+  const rest = pathname.slice(prefix.length)
+  const slashIndex = rest.indexOf('/')
+  const rawId = slashIndex === -1 ? rest : rest.slice(0, slashIndex)
+  const suffix = slashIndex === -1 ? '' : rest.slice(slashIndex)
+
+  if (!rawId) {
+    return undefined
+  }
+
+  return {
+    id: decodeURIComponent(rawId),
+    suffix,
+  }
+}
+
 async function validateAgentConfigInput(
   input: CreateAgentConfigInput | UpdateAgentConfigInput,
+  existingAgentId?: string,
 ) {
   if (input.modelProviderId) {
     const provider = await platform.modelProviders.get(input.modelProviderId)
@@ -268,6 +303,33 @@ async function validateAgentConfigInput(
     const unknownSkills = await skillRegistry.unknown(input.skills)
     if (unknownSkills.length) {
       return `Unknown skills: ${unknownSkills.join(', ')}`
+    }
+  }
+
+  if (input.mcpServers) {
+    const missingServers: string[] = []
+    for (const id of input.mcpServers) {
+      if (!(await platform.mcpServers.get(id))) {
+        missingServers.push(id)
+      }
+    }
+    if (missingServers.length) {
+      return `Unknown MCP servers: ${missingServers.join(', ')}`
+    }
+  }
+
+  if (input.agentTools) {
+    const missingAgents: string[] = []
+    for (const id of input.agentTools) {
+      if (existingAgentId && id === existingAgentId) {
+        return 'Agent cannot reference itself as an agent tool'
+      }
+      if (!(await platform.agents.get(id))) {
+        missingAgents.push(id)
+      }
+    }
+    if (missingAgents.length) {
+      return `Unknown agent tools: ${missingAgents.join(', ')}`
     }
   }
 
@@ -342,6 +404,118 @@ async function handlePlatformModelProviders(
   }
 
   return false
+}
+
+async function handlePlatformMcpServers(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'POST' && pathname === '/v1/mcp-servers') {
+    const body = createMcpServerRequestSchema.parse(await readJson(req))
+    const server = await platform.mcpServers.create(body)
+    sendJson(res, 201, server)
+    return true
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/mcp-servers') {
+    sendJson(res, 200, await platform.mcpServers.list())
+    return true
+  }
+
+  const serverPath = getResourceSubpath(pathname, '/v1/mcp-servers/')
+  if (!serverPath) {
+    return false
+  }
+
+  const { id: serverId, suffix } = serverPath
+
+  if (req.method === 'POST' && suffix === '/test') {
+    await handleTestMcpServer(res, serverId)
+    return true
+  }
+
+  if (req.method === 'GET' && suffix === '/tools') {
+    await handleListMcpServerTools(res, serverId)
+    return true
+  }
+
+  if (suffix !== '') {
+    return false
+  }
+
+  if (req.method === 'GET') {
+    const server = await platform.mcpServers.get(serverId)
+    if (!server) {
+      sendJson(res, 404, { error: 'MCP server not found' })
+      return true
+    }
+
+    sendJson(res, 200, server)
+    return true
+  }
+
+  if (req.method === 'PATCH') {
+    const body = patchMcpServerRequestSchema.parse(await readJson(req))
+    const server = await platform.mcpServers.update(serverId, body)
+    if (!server) {
+      sendJson(res, 404, { error: 'MCP server not found' })
+      return true
+    }
+
+    sendJson(res, 200, server)
+    return true
+  }
+
+  if (req.method === 'DELETE') {
+    const deleted = await platform.mcpServers.delete(serverId)
+    if (!deleted) {
+      sendJson(res, 404, { error: 'MCP server not found' })
+      return true
+    }
+
+    sendJson(res, 200, { deleted: true })
+    return true
+  }
+
+  return false
+}
+
+async function handleTestMcpServer(res: ServerResponse, serverId: string) {
+  const server = await platform.mcpServers.get(serverId)
+  if (!server) {
+    sendJson(res, 404, { error: 'MCP server not found' })
+    return
+  }
+
+  try {
+    const tools = await listMcpTools(server)
+    sendJson(res, 200, { ok: true, tools })
+  } catch (error) {
+    sendJson(res, 200, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      cause: getErrorCauseMessage(error),
+    })
+  }
+}
+
+async function handleListMcpServerTools(res: ServerResponse, serverId: string) {
+  const server = await platform.mcpServers.get(serverId)
+  if (!server) {
+    sendJson(res, 404, { error: 'MCP server not found' })
+    return
+  }
+
+  try {
+    sendJson(res, 200, await listMcpTools(server))
+  } catch (error) {
+    sendJson(res, 200, {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      cause: getErrorCauseMessage(error),
+    })
+  }
 }
 
 function getProviderSubpath(pathname: string) {
@@ -504,7 +678,7 @@ async function handlePlatformAgents(
 
   if (req.method === 'PATCH') {
     const body = patchAgentRequestSchema.parse(await readJson(req))
-    const validationError = await validateAgentConfigInput(body)
+    const validationError = await validateAgentConfigInput(body, agentId)
     if (validationError) {
       sendJson(res, 400, { error: validationError })
       return true
@@ -528,6 +702,207 @@ async function handlePlatformAgents(
     }
 
     sendJson(res, 200, { deleted: true })
+    return true
+  }
+
+  return false
+}
+
+async function resolveAgentRuntimeConfig(agent: AgentConfig) {
+  const modelProvider = agent.modelProviderId
+    ? await platform.modelProviders.getWithSecret(agent.modelProviderId)
+    : undefined
+  const mcpServers = await Promise.all(
+    (agent.mcpServers ?? []).map((id) => platform.mcpServers.get(id)),
+  )
+  const agentTools = await Promise.all(
+    (agent.agentTools ?? []).map((id) => platform.agents.get(id)),
+  )
+
+  return {
+    modelProvider,
+    mcpServers,
+    agentTools,
+  }
+}
+
+function getMissingIds<T>(
+  ids: string[],
+  resolved: Array<T | undefined>,
+) {
+  return ids.filter((_, index) => !resolved[index])
+}
+
+function getDisabledMcpServers(servers: McpServerConfig[]) {
+  return servers.filter((server) => !server.enabled)
+}
+
+function ensureModelProviderUsable(
+  agent: AgentConfig,
+  modelProvider: ModelProviderConfig | undefined,
+  toolCount: number,
+) {
+  if (agent.modelProviderId && !modelProvider) {
+    return 'Model provider not found'
+  }
+
+  if (modelProvider && !modelProvider.enabled) {
+    return 'Model provider is disabled'
+  }
+
+  if (modelProvider && modelProvider.type !== 'openai-compatible') {
+    return 'Model provider type is not supported yet'
+  }
+
+  if (modelProvider && toolCount > 0 && !modelProvider.capabilities.toolCalling) {
+    return 'Model provider does not support tool calling'
+  }
+
+  return undefined
+}
+
+function extractBlocksText(blocks: ContentBlock[]) {
+  return blocks.map((block) => (block.type === 'textBlock' ? block.text : '')).join('')
+}
+
+async function createExperimentAgent(
+  agent: AgentConfig,
+  provider: ModelProviderConfig | undefined,
+) {
+  const assignedSkills = await skillRegistry.resolve(agent.skills)
+  const skillContext = assignedSkills.length
+    ? assignedSkills
+        .map(
+          (skill) => `## Skill: ${skill.name}
+
+${skill.content}`,
+        )
+        .join('\n\n---\n\n')
+    : ''
+  const systemPrompt = skillContext
+    ? `${agent.systemPrompt}
+
+The following skills are enabled for this experiment agent.
+
+${skillContext}`
+    : agent.systemPrompt
+
+  return new Agent({
+    id: agent.id,
+    name: agent.name,
+    description: agent.systemPrompt.slice(0, 240),
+    model: new OpenAIModel({
+      api: 'chat',
+      modelId: agent.modelId,
+      apiKey: getProviderApiKey(provider ?? {}),
+      clientConfig: {
+        baseURL: provider?.baseURL ?? agent.baseURL,
+      },
+    }),
+    systemPrompt,
+    tools: [],
+    printer: false,
+  })
+}
+
+async function resolveExperimentAgents(agentIds: string[]) {
+  const agents = await Promise.all(agentIds.map((id) => platform.agents.get(id)))
+  const missing = getMissingIds(agentIds, agents)
+  if (missing.length) {
+    throw new Error(`Unknown agents: ${missing.join(', ')}`)
+  }
+
+  const resolvedAgents = agents as AgentConfig[]
+  const providers = await Promise.all(
+    resolvedAgents.map((agent) =>
+      agent.modelProviderId
+        ? platform.modelProviders.getWithSecret(agent.modelProviderId)
+        : undefined,
+    ),
+  )
+
+  for (let index = 0; index < resolvedAgents.length; index += 1) {
+    const error = ensureModelProviderUsable(resolvedAgents[index], providers[index], 0)
+    if (error) {
+      throw new Error(`${resolvedAgents[index].name}: ${error}`)
+    }
+  }
+
+  return Promise.all(
+    resolvedAgents.map((agent, index) => createExperimentAgent(agent, providers[index])),
+  )
+}
+
+function serializeMultiAgentResult(result: {
+  status: string
+  content: ContentBlock[]
+  results: Array<{
+    nodeId: string
+    status: string
+    content: ContentBlock[]
+    error?: Error
+  }>
+}) {
+  return {
+    status: result.status,
+    output: extractBlocksText(result.content),
+    nodeResults: result.results.map((node) => ({
+      nodeId: node.nodeId,
+      status: node.status,
+      output: extractBlocksText(node.content),
+      error: node.error?.message,
+    })),
+  }
+}
+
+async function handlePlatformMultiAgent(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'POST' && pathname === '/v1/multi-agent/graph/runs') {
+    const body = graphRunRequestSchema.parse(await readJson(req))
+    const nodeIds = new Set(body.nodeAgentIds)
+    for (const [source, target] of body.edges) {
+      if (!nodeIds.has(source) || !nodeIds.has(target)) {
+        sendJson(res, 400, { error: 'Graph edges must reference nodeAgentIds' })
+        return true
+      }
+    }
+
+    try {
+      const nodes = await resolveExperimentAgents(body.nodeAgentIds)
+      const graph = new Graph({
+        nodes,
+        edges: body.edges,
+      })
+      const result = await graph.invoke(body.input)
+      sendJson(res, 200, serializeMultiAgentResult(result))
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && pathname === '/v1/multi-agent/swarm/runs') {
+    const body = swarmRunRequestSchema.parse(await readJson(req))
+    if (!body.nodeAgentIds.includes(body.startAgentId)) {
+      sendJson(res, 400, { error: 'startAgentId must be included in nodeAgentIds' })
+      return true
+    }
+
+    try {
+      const nodes = await resolveExperimentAgents(body.nodeAgentIds)
+      const swarm = new Swarm({
+        nodes,
+        start: body.startAgentId,
+        maxSteps: body.maxSteps ?? 4,
+      })
+      const result = await swarm.invoke(body.input)
+      sendJson(res, 200, serializeMultiAgentResult(result))
+    } catch (error) {
+      sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+    }
     return true
   }
 
@@ -658,6 +1033,23 @@ async function updatePlatformSessionStatus(
   return session
 }
 
+async function failPlatformSessionPreflight(
+  res: ServerResponse,
+  sessionId: string,
+  statusCode: number,
+  message: string,
+) {
+  const errorEvent: SessionEvent = {
+    type: 'session.error',
+    sessionId,
+    message,
+    createdAt: new Date().toISOString(),
+  }
+  await appendEvent(sessionId, errorEvent)
+  await updatePlatformSessionStatus(sessionId, 'error')
+  sendJson(res, statusCode, { error: message })
+}
+
 async function handlePostPlatformSessionMessage(
   req: IncomingMessage,
   res: ServerResponse,
@@ -675,27 +1067,50 @@ async function handlePostPlatformSessionMessage(
     sendJson(res, 404, { error: 'Agent not found' })
     return
   }
-  const modelProvider = agent.modelProviderId
-    ? await platform.modelProviders.getWithSecret(agent.modelProviderId)
-    : undefined
 
-  if (agent.modelProviderId && !modelProvider) {
-    sendJson(res, 400, { error: 'Model provider not found' })
+  const runtimeConfig = await resolveAgentRuntimeConfig(agent)
+  const missingMcpServers = getMissingIds(agent.mcpServers ?? [], runtimeConfig.mcpServers)
+  if (missingMcpServers.length) {
+    await failPlatformSessionPreflight(
+      res,
+      sessionId,
+      400,
+      `MCP server not found: ${missingMcpServers.join(', ')}`,
+    )
     return
   }
 
-  if (modelProvider && !modelProvider.enabled) {
-    sendJson(res, 400, { error: 'Model provider is disabled' })
+  const missingAgentTools = getMissingIds(agent.agentTools ?? [], runtimeConfig.agentTools)
+  if (missingAgentTools.length) {
+    await failPlatformSessionPreflight(
+      res,
+      sessionId,
+      400,
+      `Agent tool not found: ${missingAgentTools.join(', ')}`,
+    )
     return
   }
 
-  if (modelProvider && modelProvider.type !== 'openai-compatible') {
-    sendJson(res, 400, { error: 'Model provider type is not supported yet' })
+  const resolvedMcpServers = runtimeConfig.mcpServers as McpServerConfig[]
+  const resolvedAgentTools = runtimeConfig.agentTools as AgentConfig[]
+  const disabledMcpServers = getDisabledMcpServers(resolvedMcpServers)
+  if (disabledMcpServers.length) {
+    await failPlatformSessionPreflight(
+      res,
+      sessionId,
+      400,
+      `MCP server is disabled: ${disabledMcpServers.map((server) => server.name).join(', ')}`,
+    )
     return
   }
 
-  if (modelProvider && agent.tools.length && !modelProvider.capabilities.toolCalling) {
-    sendJson(res, 400, { error: 'Model provider does not support tool calling' })
+  const modelProviderError = ensureModelProviderUsable(
+    agent,
+    runtimeConfig.modelProvider,
+    agent.tools.length + resolvedMcpServers.length + resolvedAgentTools.length,
+  )
+  if (modelProviderError) {
+    await failPlatformSessionPreflight(res, sessionId, 400, modelProviderError)
     return
   }
 
@@ -722,7 +1137,9 @@ async function handlePostPlatformSessionMessage(
     try {
       for await (const event of runtime.runMessage({
         agent,
-        modelProvider,
+        modelProvider: runtimeConfig.modelProvider,
+        mcpServers: resolvedMcpServers,
+        agentTools: resolvedAgentTools,
         session: runningSession ?? session,
         message: body.message,
         events: await platform.events.list(sessionId),
@@ -831,6 +1248,10 @@ async function handlePlatformRequest(
     return true
   }
 
+  if (await handlePlatformMcpServers(req, res, pathname)) {
+    return true
+  }
+
   if (await handlePlatformRegistries(req, res, pathname)) {
     return true
   }
@@ -840,6 +1261,10 @@ async function handlePlatformRequest(
   }
 
   if (await handlePlatformSessions(req, res, pathname)) {
+    return true
+  }
+
+  if (await handlePlatformMultiAgent(req, res, pathname)) {
     return true
   }
 
@@ -938,6 +1363,6 @@ const host = process.env.HOST ?? '0.0.0.0'
 createServer(handleRequest).listen(port, host, () => {
   console.log(`Agent HTTP server listening on http://${host}:${port}`)
   console.log(
-    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions',
+    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions, /v1/model-providers, /v1/mcp-servers, /v1/multi-agent/*',
   )
 })

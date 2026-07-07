@@ -1,18 +1,22 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentStore } from './agents-store'
 import type { EventLog } from './event-log'
+import type { McpServerStore } from './mcp-servers-store'
 import type { ModelProviderStore } from './model-providers-store'
 import type { Persistence } from './persistence'
 import type { SessionStore } from './sessions-store'
 import type {
   AgentConfig,
   CreateAgentConfigInput,
+  CreateMcpServerInput,
   CreateModelProviderInput,
   ModelProviderConfig,
+  McpServerConfig,
   SessionEvent,
   SessionMeta,
   SessionStatus,
   UpdateAgentConfigInput,
+  UpdateMcpServerInput,
   UpdateModelProviderInput,
 } from './types'
 
@@ -28,6 +32,7 @@ function cloneAgent(agent: AgentConfig): AgentConfig {
     tools: [...agent.tools],
     skills: [...agent.skills],
     mcpServers: agent.mcpServers ? [...agent.mcpServers] : undefined,
+    agentTools: agent.agentTools ? [...agent.agentTools] : undefined,
   }
 }
 
@@ -53,6 +58,15 @@ function cloneSession(session: SessionMeta): SessionMeta {
   return { ...session }
 }
 
+function cloneMcpServer(server: McpServerConfig): McpServerConfig {
+  return {
+    ...server,
+    args: server.args ? [...server.args] : undefined,
+    env: server.env ? { ...server.env } : undefined,
+    headers: server.headers ? { ...server.headers } : undefined,
+  }
+}
+
 function cloneEvent(event: SessionEvent): SessionEvent {
   return { ...event }
 }
@@ -60,6 +74,7 @@ function cloneEvent(event: SessionEvent): SessionEvent {
 export function createInMemoryPersistence(options: { onEvent?: EventListener } = {}): Persistence {
   const agents = new Map<string, AgentConfig>()
   const modelProviders = new Map<string, ModelProviderConfig>()
+  const mcpServers = new Map<string, McpServerConfig>()
   const sessions = new Map<string, SessionMeta>()
   const events = new Map<string, SessionEvent[]>()
 
@@ -90,6 +105,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
         tools: [...input.tools],
         skills: [...input.skills],
         mcpServers: input.mcpServers ? [...input.mcpServers] : [],
+        agentTools: input.agentTools ? [...input.agentTools] : [],
         createdAt: timestamp,
         updatedAt: timestamp,
       }
@@ -120,6 +136,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
         tools: patch.tools ? [...patch.tools] : existing.tools,
         skills: patch.skills ? [...patch.skills] : existing.skills,
         mcpServers: patch.mcpServers ? [...patch.mcpServers] : existing.mcpServers,
+        agentTools: patch.agentTools ? [...patch.agentTools] : existing.agentTools,
         updatedAt: nowIso(),
       }
 
@@ -191,6 +208,61 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
 
     async delete(id) {
       return modelProviders.delete(id)
+    },
+  }
+
+  const mcpServerStore: McpServerStore = {
+    async create(input: CreateMcpServerInput) {
+      const timestamp = nowIso()
+      const server: McpServerConfig = {
+        id: randomUUID(),
+        name: input.name,
+        transport: input.transport,
+        command: input.command,
+        args: input.args ? [...input.args] : undefined,
+        env: input.env ? { ...input.env } : undefined,
+        cwd: input.cwd,
+        url: input.url,
+        headers: input.headers ? { ...input.headers } : undefined,
+        enabled: input.enabled ?? true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
+
+      mcpServers.set(server.id, server)
+      return cloneMcpServer(server)
+    },
+
+    async list() {
+      return [...mcpServers.values()].map(cloneMcpServer)
+    },
+
+    async get(id) {
+      const server = mcpServers.get(id)
+      return server ? cloneMcpServer(server) : undefined
+    },
+
+    async update(id, patch: UpdateMcpServerInput) {
+      const existing = mcpServers.get(id)
+      if (!existing) {
+        return undefined
+      }
+
+      const updated: McpServerConfig = {
+        ...existing,
+        ...patch,
+        args: patch.args ? [...patch.args] : existing.args,
+        env: patch.env ? { ...patch.env } : existing.env,
+        headers: patch.headers ? { ...patch.headers } : existing.headers,
+        updatedAt: nowIso(),
+      }
+
+      mcpServers.set(id, updated)
+      return cloneMcpServer(updated)
+    },
+
+    async delete(id) {
+      return mcpServers.delete(id)
     },
   }
 
@@ -269,6 +341,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
   return {
     agents: agentStore,
     modelProviders: modelProviderStore,
+    mcpServers: mcpServerStore,
     sessions: sessionStore,
     events: eventLog,
   }

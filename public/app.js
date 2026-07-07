@@ -2,12 +2,14 @@ const storageKey = 'stander-console-ui-v1'
 
 const state = {
   providers: [],
+  mcpServers: [],
   agents: [],
   tools: [],
   skills: [],
   sessions: [],
   events: [],
   activeProviderId: '',
+  activeMcpServerId: '',
   activeAgentId: '',
   activeSessionId: '',
   activeTab: 'providers',
@@ -54,6 +56,24 @@ const el = {
   deleteProviderButton: document.querySelector('#deleteProviderButton'),
   providerTestResult: document.querySelector('#providerTestResult'),
 
+  mcpServersList: document.querySelector('#mcpServersList'),
+  mcpServerForm: document.querySelector('#mcpServerForm'),
+  mcpServerId: document.querySelector('#mcpServerId'),
+  mcpServerName: document.querySelector('#mcpServerName'),
+  mcpServerTransport: document.querySelector('#mcpServerTransport'),
+  mcpServerCommand: document.querySelector('#mcpServerCommand'),
+  mcpServerArgs: document.querySelector('#mcpServerArgs'),
+  mcpServerEnv: document.querySelector('#mcpServerEnv'),
+  mcpServerCwd: document.querySelector('#mcpServerCwd'),
+  mcpServerUrl: document.querySelector('#mcpServerUrl'),
+  mcpServerHeaders: document.querySelector('#mcpServerHeaders'),
+  mcpServerEnabled: document.querySelector('#mcpServerEnabled'),
+  newMcpServerButton: document.querySelector('#newMcpServerButton'),
+  testMcpServerButton: document.querySelector('#testMcpServerButton'),
+  loadMcpToolsButton: document.querySelector('#loadMcpToolsButton'),
+  deleteMcpServerButton: document.querySelector('#deleteMcpServerButton'),
+  mcpServerResult: document.querySelector('#mcpServerResult'),
+
   agentsList: document.querySelector('#agentsList'),
   agentForm: document.querySelector('#agentForm'),
   agentId: document.querySelector('#agentId'),
@@ -64,6 +84,8 @@ const el = {
   agentSystemPrompt: document.querySelector('#agentSystemPrompt'),
   agentTools: document.querySelector('#agentTools'),
   agentSkills: document.querySelector('#agentSkills'),
+  agentMcpServers: document.querySelector('#agentMcpServers'),
+  agentChildAgents: document.querySelector('#agentChildAgents'),
   newAgentButton: document.querySelector('#newAgentButton'),
   deleteAgentButton: document.querySelector('#deleteAgentButton'),
 
@@ -76,6 +98,7 @@ function restoreUiState() {
   try {
     const stored = JSON.parse(localStorage.getItem(storageKey) || '{}')
     state.activeProviderId = stored.activeProviderId || ''
+    state.activeMcpServerId = stored.activeMcpServerId || ''
     state.activeAgentId = stored.activeAgentId || ''
     state.activeSessionId = stored.activeSessionId || ''
     state.activeTab = stored.activeTab || 'providers'
@@ -89,6 +112,7 @@ function persistUiState() {
     storageKey,
     JSON.stringify({
       activeProviderId: state.activeProviderId,
+      activeMcpServerId: state.activeMcpServerId,
       activeAgentId: state.activeAgentId,
       activeSessionId: state.activeSessionId,
       activeTab: state.activeTab,
@@ -115,8 +139,9 @@ async function api(path, options = {}) {
 
 async function loadPlatform() {
   setConnection('正在加载平台数据', 'busy')
-  const [providers, agents, tools, skills, sessions] = await Promise.all([
+  const [providers, mcpServers, agents, tools, skills, sessions] = await Promise.all([
     api('/v1/model-providers'),
+    api('/v1/mcp-servers'),
     api('/v1/agents'),
     api('/v1/tools'),
     api('/v1/skills'),
@@ -124,6 +149,7 @@ async function loadPlatform() {
   ])
 
   state.providers = providers
+  state.mcpServers = mcpServers
   state.agents = agents
   state.tools = tools
   state.skills = skills
@@ -143,6 +169,9 @@ function reconcileSelection() {
   if (!state.providers.some((provider) => provider.id === state.activeProviderId)) {
     state.activeProviderId = state.providers[0]?.id || ''
   }
+  if (!state.mcpServers.some((server) => server.id === state.activeMcpServerId)) {
+    state.activeMcpServerId = state.mcpServers[0]?.id || ''
+  }
   if (!state.agents.some((agent) => agent.id === state.activeAgentId)) {
     state.activeAgentId = state.agents[0]?.id || ''
   }
@@ -156,6 +185,8 @@ function renderAll() {
   renderTabs()
   renderProviders()
   renderProviderForm()
+  renderMcpServers()
+  renderMcpServerForm()
   renderAgents()
   renderAgentForm()
   renderRegistries()
@@ -243,6 +274,49 @@ function renderProviderForm() {
   el.providerTestResult.hidden = true
 }
 
+function renderMcpServers() {
+  el.mcpServersList.innerHTML = ''
+
+  if (!state.mcpServers.length) {
+    el.mcpServersList.append(emptyBlock('暂无 MCP server。可先创建本地 stdio 或 streamable-http server。'))
+    return
+  }
+
+  for (const server of state.mcpServers) {
+    const item = entityButton({
+      id: server.id,
+      title: server.name,
+      meta: `${server.transport} · ${server.enabled ? 'enabled' : 'disabled'}`,
+      active: server.id === state.activeMcpServerId,
+    })
+    item.addEventListener('click', () => {
+      state.activeMcpServerId = server.id
+      state.activeTab = 'mcp'
+      persistUiState()
+      renderAll()
+    })
+    el.mcpServersList.append(item)
+  }
+}
+
+function renderMcpServerForm() {
+  const server = getActiveMcpServer()
+  el.mcpServerId.value = server?.id || ''
+  el.mcpServerName.value = server?.name || ''
+  el.mcpServerTransport.value = server?.transport || 'stdio'
+  el.mcpServerCommand.value = server?.command || ''
+  el.mcpServerArgs.value = server?.args?.join('\n') || ''
+  el.mcpServerEnv.value = formatJsonInput(server?.env)
+  el.mcpServerCwd.value = server?.cwd || ''
+  el.mcpServerUrl.value = server?.url || ''
+  el.mcpServerHeaders.value = formatJsonInput(server?.headers)
+  el.mcpServerEnabled.checked = server?.enabled ?? true
+  el.testMcpServerButton.disabled = !server
+  el.loadMcpToolsButton.disabled = !server
+  el.deleteMcpServerButton.disabled = !server
+  el.mcpServerResult.hidden = true
+}
+
 function renderAgents() {
   el.agentsList.innerHTML = ''
 
@@ -287,10 +361,26 @@ function renderAgentForm() {
   el.agentSystemPrompt.value = agent?.systemPrompt || '你是一个 helpful assistant，请用中文回答。'
   renderChecks(el.agentTools, state.tools, agent?.tools || [], 'tool')
   renderChecks(el.agentSkills, state.skills, agent?.skills || [], 'skill')
+  renderChecks(el.agentMcpServers, state.mcpServers, agent?.mcpServers || [], 'MCP server', {
+    valueKey: 'id',
+    label: (server) => `${server.name} (${server.transport})`,
+  })
+  renderChecks(
+    el.agentChildAgents,
+    state.agents.filter((item) => item.id !== agent?.id),
+    agent?.agentTools || [],
+    'child agent',
+    {
+      valueKey: 'id',
+      label: (child) => `${child.name} (${child.modelId})`,
+    },
+  )
   el.deleteAgentButton.disabled = !agent
 }
 
-function renderChecks(container, items, selected, kind) {
+function renderChecks(container, items, selected, kind, options = {}) {
+  const valueKey = options.valueKey || 'name'
+  const getLabel = options.label || ((item) => item.name)
   container.innerHTML = ''
   if (!items.length) {
     container.append(emptyBlock(`暂无 ${kind}。`))
@@ -302,10 +392,10 @@ function renderChecks(container, items, selected, kind) {
     label.className = 'check-item'
     const checkbox = document.createElement('input')
     checkbox.type = 'checkbox'
-    checkbox.value = item.name
-    checkbox.checked = selected.includes(item.name)
+    checkbox.value = item[valueKey]
+    checkbox.checked = selected.includes(item[valueKey])
     const text = document.createElement('span')
-    text.textContent = item.name
+    text.textContent = getLabel(item)
     label.append(checkbox, text)
     container.append(label)
   }
@@ -703,7 +793,8 @@ async function saveAgent(event) {
     systemPrompt: el.agentSystemPrompt.value,
     tools: selectedChecks(el.agentTools),
     skills: selectedChecks(el.agentSkills),
-    mcpServers: [],
+    mcpServers: selectedChecks(el.agentMcpServers),
+    agentTools: selectedChecks(el.agentChildAgents),
   }
 
   if (el.agentProviderId.value) {
@@ -733,6 +824,66 @@ async function saveAgent(event) {
   showNotice('Agent 已保存。', 'ok')
 }
 
+async function saveMcpServer(event) {
+  event.preventDefault()
+  const body = {
+    name: el.mcpServerName.value.trim(),
+    transport: el.mcpServerTransport.value,
+    enabled: el.mcpServerEnabled.checked,
+  }
+
+  if (!body.name) {
+    showNotice('MCP server 名称必填。', 'error')
+    return
+  }
+
+  addOptional(body, 'command', el.mcpServerCommand.value)
+  addOptional(body, 'cwd', el.mcpServerCwd.value)
+  addOptional(body, 'url', el.mcpServerUrl.value)
+
+  const args = splitList(el.mcpServerArgs.value)
+  if (args.length) {
+    body.args = args
+  }
+
+  const env = parseJsonRecordInput(el.mcpServerEnv.value, 'Env JSON')
+  if (env) {
+    body.env = env
+  }
+
+  const headers = parseJsonRecordInput(el.mcpServerHeaders.value, 'Headers JSON')
+  if (headers) {
+    body.headers = headers
+  }
+
+  if (body.transport === 'stdio' && !body.command) {
+    showNotice('stdio MCP server 需要填写 command。', 'error')
+    return
+  }
+
+  if (body.transport === 'streamable-http' && !body.url) {
+    showNotice('streamable-http MCP server 需要填写 URL。', 'error')
+    return
+  }
+
+  const serverId = el.mcpServerId.value
+  const server = serverId
+    ? await api(`/v1/mcp-servers/${encodeURIComponent(serverId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      })
+    : await api('/v1/mcp-servers', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+
+  state.activeMcpServerId = server.id
+  state.mcpServers = await api('/v1/mcp-servers')
+  persistUiState()
+  renderAll()
+  showNotice('MCP server 已保存。', 'ok')
+}
+
 async function testProvider() {
   const provider = getActiveProvider()
   if (!provider) {
@@ -746,6 +897,30 @@ async function testProvider() {
   el.providerTestResult.textContent = JSON.stringify(result, null, 2)
 }
 
+async function testMcpServer() {
+  const server = getActiveMcpServer()
+  if (!server) {
+    return
+  }
+  el.mcpServerResult.hidden = false
+  el.mcpServerResult.textContent = '正在测试 MCP 连接...'
+  const result = await api(`/v1/mcp-servers/${encodeURIComponent(server.id)}/test`, {
+    method: 'POST',
+  })
+  el.mcpServerResult.textContent = JSON.stringify(result, null, 2)
+}
+
+async function loadMcpServerTools() {
+  const server = getActiveMcpServer()
+  if (!server) {
+    return
+  }
+  el.mcpServerResult.hidden = false
+  el.mcpServerResult.textContent = '正在读取 MCP tools...'
+  const result = await api(`/v1/mcp-servers/${encodeURIComponent(server.id)}/tools`)
+  el.mcpServerResult.textContent = JSON.stringify(result, null, 2)
+}
+
 async function deleteProvider() {
   const provider = getActiveProvider()
   if (!provider || !window.confirm(`删除 provider「${provider.name}」？`)) {
@@ -754,6 +929,18 @@ async function deleteProvider() {
   await api(`/v1/model-providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' })
   state.providers = await api('/v1/model-providers')
   state.activeProviderId = state.providers[0]?.id || ''
+  persistUiState()
+  renderAll()
+}
+
+async function deleteMcpServer() {
+  const server = getActiveMcpServer()
+  if (!server || !window.confirm(`删除 MCP server「${server.name}」？`)) {
+    return
+  }
+  await api(`/v1/mcp-servers/${encodeURIComponent(server.id)}`, { method: 'DELETE' })
+  state.mcpServers = await api('/v1/mcp-servers')
+  state.activeMcpServerId = state.mcpServers[0]?.id || ''
   persistUiState()
   renderAll()
 }
@@ -777,6 +964,10 @@ async function showSkill(name) {
 
 function getActiveProvider() {
   return state.providers.find((provider) => provider.id === state.activeProviderId)
+}
+
+function getActiveMcpServer() {
+  return state.mcpServers.find((server) => server.id === state.activeMcpServerId)
 }
 
 function getActiveAgent() {
@@ -803,6 +994,36 @@ function addOptional(target, key, value) {
   if (trimmed) {
     target[key] = trimmed
   }
+}
+
+function parseJsonRecordInput(value, label) {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    throw new Error(`${label} 必须是合法 JSON 对象。`)
+  }
+
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error(`${label} 必须是 JSON 对象。`)
+  }
+
+  for (const [key, val] of Object.entries(parsed)) {
+    if (typeof key !== 'string' || typeof val !== 'string') {
+      throw new Error(`${label} 的 key 和 value 都必须是字符串。`)
+    }
+  }
+
+  return parsed
+}
+
+function formatJsonInput(value) {
+  return value ? JSON.stringify(value, null, 2) : ''
 }
 
 function entityButton({ id, title, meta, active }) {
@@ -879,6 +1100,9 @@ el.tabs.forEach((tab) => {
 el.providerForm.addEventListener('submit', (event) => {
   saveProvider(event).catch((error) => showNotice(error.message, 'error'))
 })
+el.mcpServerForm.addEventListener('submit', (event) => {
+  saveMcpServer(event).catch((error) => showNotice(error.message, 'error'))
+})
 el.agentForm.addEventListener('submit', (event) => {
   saveAgent(event).catch((error) => showNotice(error.message, 'error'))
 })
@@ -886,6 +1110,13 @@ el.newProviderButton.addEventListener('click', () => {
   state.activeProviderId = ''
   persistUiState()
   renderProviderForm()
+})
+el.newMcpServerButton.addEventListener('click', () => {
+  state.activeMcpServerId = ''
+  state.activeTab = 'mcp'
+  persistUiState()
+  renderTabs()
+  renderMcpServerForm()
 })
 el.newAgentButton.addEventListener('click', () => {
   state.activeAgentId = ''
@@ -898,8 +1129,23 @@ el.testProviderButton.addEventListener('click', () => {
     el.providerTestResult.textContent = error.message
   })
 })
+el.testMcpServerButton.addEventListener('click', () => {
+  testMcpServer().catch((error) => {
+    el.mcpServerResult.hidden = false
+    el.mcpServerResult.textContent = error.message
+  })
+})
+el.loadMcpToolsButton.addEventListener('click', () => {
+  loadMcpServerTools().catch((error) => {
+    el.mcpServerResult.hidden = false
+    el.mcpServerResult.textContent = error.message
+  })
+})
 el.deleteProviderButton.addEventListener('click', () => {
   deleteProvider().catch((error) => showNotice(error.message, 'error'))
+})
+el.deleteMcpServerButton.addEventListener('click', () => {
+  deleteMcpServer().catch((error) => showNotice(error.message, 'error'))
 })
 el.deleteAgentButton.addEventListener('click', () => {
   deleteAgent().catch((error) => showNotice(error.message, 'error'))

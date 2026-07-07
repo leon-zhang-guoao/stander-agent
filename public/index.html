@@ -19,6 +19,7 @@
 
         <nav class="nav-tabs" aria-label="主导航">
           <button class="nav-tab" type="button" data-tab="providers">Providers</button>
+          <button class="nav-tab" type="button" data-tab="mcp">MCP</button>
           <button class="nav-tab" type="button" data-tab="agents">Agents</button>
           <button class="nav-tab" type="button" data-tab="registries">Tools / Skills</button>
         </nav>
@@ -133,6 +134,66 @@
           </form>
         </section>
 
+        <section id="mcpPanel" class="panel" data-panel="mcp" hidden>
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">MCP Registry</p>
+              <h2>MCP Servers</h2>
+            </div>
+            <button id="newMcpServerButton" class="small-button" type="button">新建</button>
+          </div>
+          <div id="mcpServersList" class="entity-list"></div>
+          <form id="mcpServerForm" class="config-form">
+            <input id="mcpServerId" type="hidden" />
+            <label>
+              名称
+              <input id="mcpServerName" name="name" type="text" required />
+            </label>
+            <label>
+              Transport
+              <select id="mcpServerTransport" name="transport">
+                <option value="stdio">stdio</option>
+                <option value="streamable-http">streamable-http</option>
+              </select>
+            </label>
+            <label>
+              Command
+              <input id="mcpServerCommand" name="command" type="text" placeholder="npx" />
+            </label>
+            <label>
+              Args
+              <textarea id="mcpServerArgs" name="args" rows="2" placeholder="每行或逗号分隔一个参数"></textarea>
+            </label>
+            <label>
+              Env JSON
+              <textarea id="mcpServerEnv" name="env" rows="3" placeholder='{"TOKEN":"value"}'></textarea>
+            </label>
+            <label>
+              CWD
+              <input id="mcpServerCwd" name="cwd" type="text" placeholder="/absolute/path" />
+            </label>
+            <label>
+              URL
+              <input id="mcpServerUrl" name="url" type="text" placeholder="https://example.com/mcp" />
+            </label>
+            <label>
+              Headers JSON
+              <textarea id="mcpServerHeaders" name="headers" rows="3" placeholder='{"Authorization":"Bearer ..."}'></textarea>
+            </label>
+            <label class="inline-field">
+              <input id="mcpServerEnabled" type="checkbox" />
+              启用 MCP server
+            </label>
+            <div class="form-actions">
+              <button type="submit">保存 MCP</button>
+              <button id="testMcpServerButton" class="secondary-button" type="button">测试连接</button>
+              <button id="loadMcpToolsButton" class="secondary-button" type="button">查看 tools</button>
+              <button id="deleteMcpServerButton" class="danger-button" type="button">删除</button>
+            </div>
+            <pre id="mcpServerResult" class="result-box" hidden></pre>
+          </form>
+        </section>
+
         <section id="agentsPanel" class="panel" data-panel="agents" hidden>
           <div class="panel-header">
             <div>
@@ -171,6 +232,14 @@
             <fieldset>
               <legend>Skills</legend>
               <div id="agentSkills" class="check-list"></div>
+            </fieldset>
+            <fieldset>
+              <legend>MCP Servers</legend>
+              <div id="agentMcpServers" class="check-list"></div>
+            </fieldset>
+            <fieldset>
+              <legend>Agent Tools</legend>
+              <div id="agentChildAgents" class="check-list"></div>
             </fieldset>
             <div class="form-actions">
               <button type="submit">保存 agent</button>

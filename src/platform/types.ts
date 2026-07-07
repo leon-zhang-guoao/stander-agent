@@ -8,6 +8,7 @@ export type AgentConfig = {
   tools: string[]
   skills: string[]
   mcpServers?: string[]
+  agentTools?: string[]
   createdAt: string
   updatedAt: string
 }
@@ -21,6 +22,7 @@ export type CreateAgentConfigInput = {
   tools: string[]
   skills: string[]
   mcpServers?: string[]
+  agentTools?: string[]
 }
 
 export type UpdateAgentConfigInput = Partial<CreateAgentConfigInput>
@@ -70,6 +72,37 @@ export type CreateModelProviderInput = {
 }
 
 export type UpdateModelProviderInput = Partial<CreateModelProviderInput>
+
+export type McpServerTransport = 'stdio' | 'streamable-http'
+
+export type McpServerConfig = {
+  id: string
+  name: string
+  transport: McpServerTransport
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  cwd?: string
+  url?: string
+  headers?: Record<string, string>
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type CreateMcpServerInput = {
+  name: string
+  transport: McpServerTransport
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  cwd?: string
+  url?: string
+  headers?: Record<string, string>
+  enabled?: boolean
+}
+
+export type UpdateMcpServerInput = Partial<CreateMcpServerInput>
 
 export type SessionStatus = 'idle' | 'running' | 'error'
 
