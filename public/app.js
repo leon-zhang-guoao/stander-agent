@@ -41,6 +41,8 @@ const el = {
   providerDefaultModelId: document.querySelector('#providerDefaultModelId'),
   providerAvailableModels: document.querySelector('#providerAvailableModels'),
   providerApiKeyRef: document.querySelector('#providerApiKeyRef'),
+  providerApiKey: document.querySelector('#providerApiKey'),
+  providerApiKeyHint: document.querySelector('#providerApiKeyHint'),
   providerEnabled: document.querySelector('#providerEnabled'),
   capStreaming: document.querySelector('#capStreaming'),
   capToolCalling: document.querySelector('#capToolCalling'),
@@ -226,6 +228,10 @@ function renderProviderForm() {
   el.providerDefaultModelId.value = provider?.defaultModelId || ''
   el.providerAvailableModels.value = provider?.availableModels?.join('\n') || ''
   el.providerApiKeyRef.value = provider?.apiKeyRef || ''
+  el.providerApiKey.value = ''
+  el.providerApiKeyHint.textContent = provider?.hasApiKey
+    ? '已保存 API key。留空表示不修改；填写新值会替换当前 key。'
+    : '未保存 API key。运行和测试会回退到服务进程环境变量 OPENAI_API_KEY。'
   el.providerEnabled.checked = provider?.enabled ?? true
   el.capStreaming.checked = provider?.capabilities?.streaming ?? true
   el.capToolCalling.checked = provider?.capabilities?.toolCalling ?? true
@@ -664,6 +670,7 @@ async function saveProvider(event) {
 
   addOptional(body, 'defaultModelId', el.providerDefaultModelId.value)
   addOptional(body, 'apiKeyRef', el.providerApiKeyRef.value)
+  addOptional(body, 'apiKey', el.providerApiKey.value)
   const models = splitList(el.providerAvailableModels.value)
   if (models.length) {
     body.availableModels = models

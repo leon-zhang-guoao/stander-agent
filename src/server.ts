@@ -366,7 +366,7 @@ function getProviderSubpath(pathname: string) {
 }
 
 async function handleTestModelProvider(res: ServerResponse, providerId: string) {
-  const provider = await platform.modelProviders.get(providerId)
+  const provider = await platform.modelProviders.getWithSecret(providerId)
   if (!provider) {
     sendJson(res, 404, { error: 'Model provider not found' })
     return
@@ -382,7 +382,7 @@ async function handleTestModelProvider(res: ServerResponse, providerId: string) 
   try {
     const response = await fetch(modelsUrl, {
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY ?? 'dummy-key'}`,
+        Authorization: `Bearer ${getProviderApiKey(provider)}`,
       },
     })
     const json = await response.json().catch(() => undefined)
@@ -409,8 +409,28 @@ async function handleTestModelProvider(res: ServerResponse, providerId: string) 
     sendJson(res, 200, {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
+      cause: getErrorCauseMessage(error),
     })
   }
+}
+
+function getProviderApiKey(provider: { apiKey?: string }) {
+  return provider.apiKey ?? process.env.OPENAI_API_KEY ?? 'dummy-key'
+}
+
+function getErrorCauseMessage(error: unknown) {
+  if (!(error instanceof Error)) {
+    return undefined
+  }
+
+  const cause = error.cause
+  if (cause && typeof cause === 'object') {
+    const message = 'message' in cause ? String(cause.message) : undefined
+    const code = 'code' in cause ? String(cause.code) : undefined
+    return code && message ? `${code}: ${message}` : message ?? code
+  }
+
+  return undefined
 }
 
 async function handlePlatformRegistries(
@@ -656,7 +676,7 @@ async function handlePostPlatformSessionMessage(
     return
   }
   const modelProvider = agent.modelProviderId
-    ? await platform.modelProviders.get(agent.modelProviderId)
+    ? await platform.modelProviders.getWithSecret(agent.modelProviderId)
     : undefined
 
   if (agent.modelProviderId && !modelProvider) {

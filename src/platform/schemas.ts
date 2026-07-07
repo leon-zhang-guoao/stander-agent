@@ -43,6 +43,7 @@ export const createModelProviderRequestSchema = z.object({
     'custom',
   ]),
   baseURL: z.string().min(1),
+  apiKey: z.string().min(1).optional(),
   apiKeyRef: z.string().min(1).optional(),
   defaultModelId: z.string().min(1).optional(),
   availableModels: z.array(z.string().min(1)).optional(),

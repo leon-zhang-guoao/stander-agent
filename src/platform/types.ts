@@ -46,11 +46,13 @@ export type ModelProviderConfig = {
   name: string
   type: ModelProviderType
   baseURL: string
+  apiKey?: string
   apiKeyRef?: string
   defaultModelId?: string
   availableModels?: string[]
   capabilities: ModelProviderCapabilities
   enabled: boolean
+  hasApiKey?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -59,6 +61,7 @@ export type CreateModelProviderInput = {
   name: string
   type: ModelProviderType
   baseURL: string
+  apiKey?: string
   apiKeyRef?: string
   defaultModelId?: string
   availableModels?: string[]

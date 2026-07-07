@@ -39,6 +39,16 @@ function cloneModelProvider(provider: ModelProviderConfig): ModelProviderConfig 
   }
 }
 
+function sanitizeModelProvider(provider: ModelProviderConfig): ModelProviderConfig {
+  const clone = cloneModelProvider(provider)
+  const hasApiKey = Boolean(clone.apiKey)
+  delete clone.apiKey
+  return {
+    ...clone,
+    hasApiKey,
+  }
+}
+
 function cloneSession(session: SessionMeta): SessionMeta {
   return { ...session }
 }
@@ -130,6 +140,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
         name: input.name,
         type: input.type,
         baseURL: input.baseURL,
+        apiKey: input.apiKey,
         apiKeyRef: input.apiKeyRef,
         defaultModelId: input.defaultModelId,
         availableModels: input.availableModels ? [...input.availableModels] : undefined,
@@ -140,14 +151,19 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
       }
 
       modelProviders.set(provider.id, provider)
-      return cloneModelProvider(provider)
+      return sanitizeModelProvider(provider)
     },
 
     async list() {
-      return [...modelProviders.values()].map(cloneModelProvider)
+      return [...modelProviders.values()].map(sanitizeModelProvider)
     },
 
     async get(id) {
+      const provider = modelProviders.get(id)
+      return provider ? sanitizeModelProvider(provider) : undefined
+    },
+
+    async getWithSecret(id) {
       const provider = modelProviders.get(id)
       return provider ? cloneModelProvider(provider) : undefined
     },
@@ -161,6 +177,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
       const updated: ModelProviderConfig = {
         ...existing,
         ...patch,
+        apiKey: patch.apiKey ?? existing.apiKey,
         capabilities: patch.capabilities ? { ...patch.capabilities } : existing.capabilities,
         availableModels: patch.availableModels
           ? [...patch.availableModels]
@@ -169,7 +186,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
       }
 
       modelProviders.set(id, updated)
-      return cloneModelProvider(updated)
+      return sanitizeModelProvider(updated)
     },
 
     async delete(id) {

@@ -107,6 +107,11 @@
               API Key Ref
               <input id="providerApiKeyRef" name="apiKeyRef" type="text" placeholder="OPENAI_API_KEY" />
             </label>
+            <label>
+              API Key
+              <input id="providerApiKey" name="apiKey" type="password" autocomplete="new-password" placeholder="留空表示不修改已保存 key" />
+              <span id="providerApiKeyHint" class="field-hint">仅保存在当前服务进程的内存里，接口不会回传明文。</span>
+            </label>
             <fieldset>
               <legend>Capabilities</legend>
               <label><input id="capStreaming" type="checkbox" /> streaming</label>
