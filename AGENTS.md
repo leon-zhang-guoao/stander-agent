@@ -201,6 +201,26 @@ These should be represented as interfaces first, then implemented later.
 - Do not break the current simple local startup flow without replacing it.
 - Keep `config.json` local only; commit only `config.example.json`.
 
+## Documentation Language Rule
+
+For documentation-type tasks, especially architecture notes, design proposals, guiding-principle documents, roadmap documents, implementation plans, and operational guides, produce both English and Chinese versions by default.
+
+Use this split:
+
+```text
+English version -> for agents, tools, future automation, and code-facing references.
+Chinese version -> for the user to read, review, and discuss.
+```
+
+Recommended naming:
+
+```text
+docs/example.md
+docs/example.zh-CN.md
+```
+
+When updating an existing document, update both language versions unless the user explicitly asks for only one language.
+
 ## Related Project Docs
 
 Project roadmap and platform design:
