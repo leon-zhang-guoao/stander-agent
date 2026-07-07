@@ -127,6 +127,7 @@ HTTP API
 type AgentConfig = {
   id: string
   name: string
+  modelProviderId?: string
   modelId: string
   baseURL: string
   systemPrompt: string
@@ -137,6 +138,50 @@ type AgentConfig = {
   updatedAt: string
 }
 ```
+
+`modelProviderId` is optional during the transition from local config to platform-managed providers. When it is missing, `modelId` and `baseURL` keep the current OpenAI-compatible behavior.
+
+### ModelProviderConfig
+
+Users should be able to define reusable model providers and attach agents to them. A provider represents a connection target and credential reference, while an agent chooses the concrete model and prompt behavior.
+
+```ts
+type ModelProviderType =
+  | 'openai-compatible'
+  | 'openai'
+  | 'anthropic'
+  | 'ollama'
+  | 'openrouter'
+  | 'custom'
+
+type ModelProviderConfig = {
+  id: string
+  name: string
+  type: ModelProviderType
+  baseURL: string
+  apiKeyRef?: string
+  defaultModelId?: string
+  availableModels?: string[]
+  capabilities: {
+    streaming: boolean
+    toolCalling: boolean
+    vision: boolean
+    jsonMode: boolean
+    reasoning: boolean
+  }
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+```
+
+Rules:
+
+- Store credential references, not raw API keys, in `ModelProviderConfig`.
+- Keep `config.json` as the local fallback for the legacy `/chat` routes until the platform path replaces them.
+- Let each `AgentConfig` select `modelProviderId` and `modelId`; if `modelId` is omitted in a future version, use the provider's `defaultModelId`.
+- Validate provider compatibility at runtime. For example, an agent that uses tools should warn or fail fast when the selected provider has `toolCalling: false`.
+- Add a simple connection test endpoint before exposing provider editing in the UI.
 
 ### SessionMeta
 
@@ -192,9 +237,37 @@ GET    /v1/sessions/:id/events/stream
 GET    /v1/tools
 GET    /v1/skills
 GET    /v1/skills/:name
+
+POST   /v1/model-providers
+GET    /v1/model-providers
+GET    /v1/model-providers/:id
+PATCH  /v1/model-providers/:id
+DELETE /v1/model-providers/:id
+POST   /v1/model-providers/:id/test
 ```
 
 The existing `/chat` and `/chat/stream` routes may remain temporarily as compatibility wrappers, but the platform path should be session-based.
+
+## Model Provider Management
+
+Model providers are a platform concern, not a Strands-specific detail. They let users reuse model endpoints across agents, rotate credentials later, and make provider capabilities explicit.
+
+Initial implementation:
+
+- Add a `ModelProviderStore` interface and an in-memory implementation.
+- Support OpenAI-compatible providers first, because the current runtime already uses `OpenAIModel`.
+- Keep `baseURL`, `defaultModelId`, and capability metadata in the provider.
+- Keep `modelId` on the agent so different agents can share one provider but use different models.
+- Add `/v1/model-providers` CRUD and `/test` for a lightweight connection check.
+
+Future implementation:
+
+- Move `apiKeyRef` behind a vault or credential store.
+- Add provider-specific adapters for Anthropic, Ollama, OpenRouter, and local models.
+- Add model discovery when the provider exposes a models endpoint.
+- Add per-provider defaults such as timeout, headers, rate-limit labels, and organization/project identifiers.
+
+Do not put raw provider credentials into agent configs, session events, or exported trajectories.
 
 ## Tool Registry
 
@@ -408,6 +481,9 @@ Do not start here. Multi-agent orchestration depends on clean agents, sessions, 
 
 ### M3: Registries
 
+- Add `ModelProviderStore`
+- Add `/v1/model-providers`
+- Allow agents to select a model provider
 - Move tools into `ToolRegistry`
 - Move skills into `SkillRegistry`
 - Allow agents to select tools and skills
@@ -417,6 +493,8 @@ Do not start here. Multi-agent orchestration depends on clean agents, sessions, 
 
 - Agent list
 - Agent create/edit
+- Model provider list
+- Model provider create/edit/test
 - Session list
 - Event timeline
 - Tool call display
@@ -454,9 +532,10 @@ These are good future directions, but building them too early will slow down the
 2. Treat events as the source of truth.
 3. Keep stores and sandbox behind interfaces.
 4. Prefer small stable APIs over large framework abstractions.
-5. Make tools and skills configurable by agent.
-6. Preserve the simple local developer experience.
-7. Add persistence and sandboxing only after the platform API is stable.
+5. Make model providers, tools, and skills configurable by agent.
+6. Never store raw model provider credentials in agent configs or events.
+7. Preserve the simple local developer experience.
+8. Add persistence and sandboxing only after the platform API is stable.
 
 ## Summary
 

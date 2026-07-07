@@ -201,6 +201,12 @@ These should be represented as interfaces first, then implemented later.
 - Do not break the current simple local startup flow without replacing it.
 - Keep `config.json` local only; commit only `config.example.json`.
 
+## Response Language Rule
+
+- Reply to the user in Chinese by default for all conversations, status updates, reviews, explanations, and final answers.
+- Keep code, API names, file paths, commands, identifiers, and protocol literals in their original language.
+- If the user explicitly asks for another language for a specific artifact or response, follow that request for that item only.
+
 ## Documentation Language Rule
 
 For documentation-type tasks, especially architecture notes, design proposals, guiding-principle documents, roadmap documents, implementation plans, and operational guides, produce both English and Chinese versions by default.

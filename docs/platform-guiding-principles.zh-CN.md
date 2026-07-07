@@ -127,6 +127,7 @@ HTTP API
 type AgentConfig = {
   id: string
   name: string
+  modelProviderId?: string
   modelId: string
   baseURL: string
   systemPrompt: string
@@ -137,6 +138,50 @@ type AgentConfig = {
   updatedAt: string
 }
 ```
+
+`modelProviderId` 在从本地配置迁移到平台化 provider 的过程中是可选字段。缺省时，`modelId` 和 `baseURL` 继续保持当前 OpenAI-compatible 行为。
+
+### ModelProviderConfig
+
+用户应该可以定义可复用的 model provider，并把 agent 绑定到这些 provider。Provider 表示连接目标和 credential 引用；agent 负责选择具体模型和 prompt 行为。
+
+```ts
+type ModelProviderType =
+  | 'openai-compatible'
+  | 'openai'
+  | 'anthropic'
+  | 'ollama'
+  | 'openrouter'
+  | 'custom'
+
+type ModelProviderConfig = {
+  id: string
+  name: string
+  type: ModelProviderType
+  baseURL: string
+  apiKeyRef?: string
+  defaultModelId?: string
+  availableModels?: string[]
+  capabilities: {
+    streaming: boolean
+    toolCalling: boolean
+    vision: boolean
+    jsonMode: boolean
+    reasoning: boolean
+  }
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+}
+```
+
+规则：
+
+- `ModelProviderConfig` 中只保存 credential 引用，不保存原始 API key。
+- 在平台路径完全替代 legacy `/chat` 之前，继续保留 `config.json` 作为本地 fallback。
+- 每个 `AgentConfig` 选择 `modelProviderId` 和 `modelId`；未来如果 `modelId` 缺省，则使用 provider 的 `defaultModelId`。
+- runtime 要校验 provider 能力是否匹配。例如 agent 使用工具时，如果 provider 的 `toolCalling: false`，应该警告或 fail fast。
+- 在 UI 暴露 provider 编辑之前，先提供一个简单的连接测试 endpoint。
 
 ### SessionMeta
 
@@ -192,9 +237,37 @@ GET    /v1/sessions/:id/events/stream
 GET    /v1/tools
 GET    /v1/skills
 GET    /v1/skills/:name
+
+POST   /v1/model-providers
+GET    /v1/model-providers
+GET    /v1/model-providers/:id
+PATCH  /v1/model-providers/:id
+DELETE /v1/model-providers/:id
+POST   /v1/model-providers/:id/test
 ```
 
 现有 `/chat` 和 `/chat/stream` 可以暂时保留为兼容入口，但平台主路径应该转向基于 session 的 API。
+
+## Model Provider 管理
+
+Model provider 是平台能力，而不是 Strands 专属细节。它让用户可以在多个 agent 之间复用模型端点，后续轮换 credential，并显式记录 provider 能力。
+
+第一版实现：
+
+- 增加 `ModelProviderStore` 接口和内存实现。
+- 优先支持 OpenAI-compatible provider，因为当前 runtime 已经使用 `OpenAIModel`。
+- 在 provider 上保存 `baseURL`、`defaultModelId` 和 capability metadata。
+- 继续把 `modelId` 放在 agent 上，让多个 agent 可以共享 provider，但使用不同模型。
+- 增加 `/v1/model-providers` CRUD 和 `/test` 轻量连接测试。
+
+未来实现：
+
+- 把 `apiKeyRef` 接到 vault 或 credential store 后面。
+- 增加 Anthropic、Ollama、OpenRouter 和本地模型的 provider-specific adapter。
+- 当 provider 暴露 models endpoint 时，支持模型发现。
+- 增加 provider 级默认配置，例如 timeout、headers、rate-limit 标签、organization/project 标识。
+
+不要把原始 provider credential 写进 agent config、session events 或导出的 trajectories。
 
 ## Tool Registry
 
@@ -408,6 +481,9 @@ Runtime adapter 根据配置创建 `McpClient`，并把 MCP client 加入 Strand
 
 ### M3：Registries
 
+- 增加 `ModelProviderStore`
+- 增加 `/v1/model-providers`
+- 允许 agent 选择 model provider
 - 把 tools 移到 `ToolRegistry`
 - 把 skills 移到 `SkillRegistry`
 - 允许 agent 选择 tools 和 skills
@@ -417,6 +493,8 @@ Runtime adapter 根据配置创建 `McpClient`，并把 MCP client 加入 Strand
 
 - Agent 列表
 - Agent 创建/编辑
+- Model provider 列表
+- Model provider 创建/编辑/测试
 - Session 列表
 - Event timeline
 - Tool call 展示
@@ -454,9 +532,10 @@ Runtime adapter 根据配置创建 `McpClient`，并把 MCP client 加入 Strand
 2. 把 events 当作事实来源。
 3. stores 和 sandbox 都走接口。
 4. 优先小而稳定的 API，不要过早抽象成大框架。
-5. tools 和 skills 必须可以按 agent 配置。
-6. 保持简单的本地开发体验。
-7. 等平台 API 稳定后，再实现持久化和 sandbox。
+5. model providers、tools 和 skills 必须可以按 agent 配置。
+6. 不要把原始 model provider credential 存进 agent config 或 events。
+7. 保持简单的本地开发体验。
+8. 等平台 API 稳定后，再实现持久化和 sandbox。
 
 ## 总结
 
