@@ -3,75 +3,197 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stander Agent</title>
+    <title>Stander Console</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <aside class="rail">
-        <div class="rail-header">
-          <div class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 40 40" role="img">
-              <path d="M20 4 34 12v16L20 36 6 28V12L20 4Z" />
-              <path d="M14 17.5h12M14 22.5h8" />
-            </svg>
-          </div>
+    <main class="console-shell">
+      <aside class="sidebar" aria-label="平台导航">
+        <header class="brand">
+          <div class="brand-mark" aria-hidden="true">SA</div>
           <div>
-            <strong>Sessions</strong>
-            <span id="sessionCount">0 active</span>
-          </div>
-        </div>
-
-        <div class="rail-actions">
-          <button id="newChatButton" class="icon-button" type="button" title="新会话" aria-label="新会话">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
-          <button id="clearButton" class="icon-button" type="button" title="清空当前会话消息" aria-label="清空当前会话消息">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M3 6h18M8 6V4h8v2M9 11v6M15 11v6M6 6l1 14h10l1-14" />
-            </svg>
-          </button>
-        </div>
-
-        <nav id="sessionsList" class="session-list" aria-label="会话列表"></nav>
-      </aside>
-
-      <section class="chat-panel" aria-label="聊天">
-        <header class="topbar">
-          <div>
-            <h1>Stander Agent</h1>
-            <p id="sessionLabel">Session ready</p>
-          </div>
-          <div id="status" class="status" data-state="idle">
-            <span></span>
-            <strong>Idle</strong>
+            <h1>Stander Console</h1>
+            <p id="connectionLabel">正在连接平台</p>
           </div>
         </header>
 
-        <div id="messages" class="messages" aria-live="polite"></div>
+        <nav class="nav-tabs" aria-label="主导航">
+          <button class="nav-tab" type="button" data-tab="providers">Providers</button>
+          <button class="nav-tab" type="button" data-tab="agents">Agents</button>
+          <button class="nav-tab" type="button" data-tab="registries">Tools / Skills</button>
+        </nav>
 
-        <form id="chatForm" class="composer">
+        <section class="sidebar-section">
+          <div class="section-heading">
+            <div>
+              <strong>Sessions</strong>
+              <span id="sessionCount">0 个会话</span>
+            </div>
+            <button id="createSessionButton" class="icon-button" type="button" title="新建 session" aria-label="新建 session">+</button>
+          </div>
+          <div id="sessionsList" class="session-list" aria-label="Session 列表"></div>
+        </section>
+      </aside>
+
+      <section class="workspace" aria-label="Session timeline">
+        <header class="workspace-header">
+          <div>
+            <p id="agentLabel" class="eyebrow">未选择 agent</p>
+            <h2 id="sessionLabel">选择或创建一个 session</h2>
+          </div>
+          <div class="status-stack">
+            <button id="refreshButton" class="small-button" type="button">刷新 events</button>
+            <div id="streamStatus" class="status-pill" data-state="idle">
+              <span></span>
+              <strong>Idle</strong>
+            </div>
+          </div>
+        </header>
+
+        <div id="notice" class="notice" hidden></div>
+        <div id="timeline" class="timeline" aria-live="polite"></div>
+
+        <form id="messageForm" class="composer">
           <textarea
             id="messageInput"
-            name="message"
             rows="1"
-            placeholder="输入消息..."
+            placeholder="向当前 platform session 发送消息，也可以输入 $code-review 显式触发 skill"
             autocomplete="off"
           ></textarea>
-          <button id="stopButton" class="icon-button stop-button" type="button" title="停止" aria-label="停止" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M8 8h8v8H8z" />
-            </svg>
-          </button>
-          <button id="sendButton" class="send-button" type="submit" title="发送" aria-label="发送">
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z" />
-            </svg>
-          </button>
+          <button id="sendButton" class="send-button" type="submit">发送</button>
         </form>
       </section>
+
+      <aside class="inspector" aria-label="配置面板">
+        <section id="providersPanel" class="panel" data-panel="providers">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Model Providers</p>
+              <h2>模型供应商</h2>
+            </div>
+            <button id="newProviderButton" class="small-button" type="button">新建</button>
+          </div>
+          <div id="providersList" class="entity-list"></div>
+          <form id="providerForm" class="config-form">
+            <input id="providerId" type="hidden" />
+            <label>
+              名称
+              <input id="providerName" name="name" type="text" required />
+            </label>
+            <label>
+              类型
+              <select id="providerType" name="type">
+                <option value="openai-compatible">openai-compatible</option>
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+                <option value="ollama">ollama</option>
+                <option value="openrouter">openrouter</option>
+                <option value="custom">custom</option>
+              </select>
+            </label>
+            <label>
+              Base URL
+              <input id="providerBaseURL" name="baseURL" type="text" placeholder="https://api.example.com/v1" required />
+            </label>
+            <label>
+              默认模型
+              <input id="providerDefaultModelId" name="defaultModelId" type="text" placeholder="gpt-5.5" />
+            </label>
+            <label>
+              可用模型
+              <textarea id="providerAvailableModels" name="availableModels" rows="3" placeholder="每行或逗号分隔一个 model id"></textarea>
+            </label>
+            <label>
+              API Key Ref
+              <input id="providerApiKeyRef" name="apiKeyRef" type="text" placeholder="OPENAI_API_KEY" />
+            </label>
+            <fieldset>
+              <legend>Capabilities</legend>
+              <label><input id="capStreaming" type="checkbox" /> streaming</label>
+              <label><input id="capToolCalling" type="checkbox" /> toolCalling</label>
+              <label><input id="capVision" type="checkbox" /> vision</label>
+              <label><input id="capJsonMode" type="checkbox" /> jsonMode</label>
+              <label><input id="capReasoning" type="checkbox" /> reasoning</label>
+            </fieldset>
+            <label class="inline-field">
+              <input id="providerEnabled" type="checkbox" />
+              启用 provider
+            </label>
+            <div class="form-actions">
+              <button type="submit">保存 provider</button>
+              <button id="testProviderButton" class="secondary-button" type="button">测试连接</button>
+              <button id="deleteProviderButton" class="danger-button" type="button">删除</button>
+            </div>
+            <pre id="providerTestResult" class="result-box" hidden></pre>
+          </form>
+        </section>
+
+        <section id="agentsPanel" class="panel" data-panel="agents" hidden>
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Agents</p>
+              <h2>Agent 配置</h2>
+            </div>
+            <button id="newAgentButton" class="small-button" type="button">新建</button>
+          </div>
+          <div id="agentsList" class="entity-list"></div>
+          <form id="agentForm" class="config-form">
+            <input id="agentId" type="hidden" />
+            <label>
+              名称
+              <input id="agentName" name="name" type="text" required />
+            </label>
+            <label>
+              Model Provider
+              <select id="agentProviderId" name="modelProviderId"></select>
+            </label>
+            <label>
+              Model ID
+              <input id="agentModelId" name="modelId" type="text" required />
+            </label>
+            <label>
+              Base URL fallback
+              <input id="agentBaseURL" name="baseURL" type="text" required />
+            </label>
+            <label>
+              System Prompt
+              <textarea id="agentSystemPrompt" name="systemPrompt" rows="5"></textarea>
+            </label>
+            <fieldset>
+              <legend>Tools</legend>
+              <div id="agentTools" class="check-list"></div>
+            </fieldset>
+            <fieldset>
+              <legend>Skills</legend>
+              <div id="agentSkills" class="check-list"></div>
+            </fieldset>
+            <div class="form-actions">
+              <button type="submit">保存 agent</button>
+              <button id="deleteAgentButton" class="danger-button" type="button">删除</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="registriesPanel" class="panel" data-panel="registries" hidden>
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Registries</p>
+              <h2>Tools / Skills</h2>
+            </div>
+          </div>
+          <div class="registry-grid">
+            <section>
+              <h3>Tools</h3>
+              <div id="toolsList" class="registry-list"></div>
+            </section>
+            <section>
+              <h3>Skills</h3>
+              <div id="skillsList" class="registry-list"></div>
+            </section>
+          </div>
+          <pre id="skillDetail" class="skill-detail">选择一个 skill 查看 SKILL.md 内容。</pre>
+        </section>
+      </aside>
     </main>
 
     <script src="/app.js" defer></script>
