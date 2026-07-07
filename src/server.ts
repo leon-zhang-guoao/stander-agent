@@ -9,6 +9,12 @@ import {
   getToolUseName,
   isToolResultEvent,
 } from './agent'
+import { createInMemoryPersistence } from './platform/in-memory-persistence'
+import {
+  createAgentRequestSchema,
+  createPlatformSessionRequestSchema,
+  patchAgentRequestSchema,
+} from './platform/schemas'
 import { withTriggeredSkills } from './skills'
 
 const chatRequestSchema = z.object({
@@ -29,6 +35,7 @@ type SessionState = {
 }
 
 const sessions = new Map<string, SessionState>()
+const platform = createInMemoryPersistence()
 const publicDir = path.join(process.cwd(), 'public')
 const staticTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -70,7 +77,7 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown) {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
   })
   res.end(JSON.stringify(body))
 }
@@ -180,7 +187,7 @@ async function handleChatStream(req: IncomingMessage, res: ServerResponse) {
     Connection: 'keep-alive',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PATCH,DELETE,OPTIONS',
   })
 
   await runExclusive(session, async () => {
@@ -206,6 +213,147 @@ async function handleChatStream(req: IncomingMessage, res: ServerResponse) {
   res.end()
 }
 
+function getRouteId(pathname: string, prefix: string) {
+  if (!pathname.startsWith(prefix)) {
+    return undefined
+  }
+
+  const rawId = pathname.slice(prefix.length)
+  if (!rawId || rawId.includes('/')) {
+    return undefined
+  }
+
+  return decodeURIComponent(rawId)
+}
+
+async function handlePlatformAgents(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'POST' && pathname === '/v1/agents') {
+    const body = createAgentRequestSchema.parse(await readJson(req))
+    const agent = await platform.agents.create(body)
+    sendJson(res, 201, agent)
+    return true
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/agents') {
+    sendJson(res, 200, await platform.agents.list())
+    return true
+  }
+
+  const agentId = getRouteId(pathname, '/v1/agents/')
+  if (!agentId) {
+    return false
+  }
+
+  if (req.method === 'GET') {
+    const agent = await platform.agents.get(agentId)
+    if (!agent) {
+      sendJson(res, 404, { error: 'Agent not found' })
+      return true
+    }
+
+    sendJson(res, 200, agent)
+    return true
+  }
+
+  if (req.method === 'PATCH') {
+    const body = patchAgentRequestSchema.parse(await readJson(req))
+    const agent = await platform.agents.update(agentId, body)
+    if (!agent) {
+      sendJson(res, 404, { error: 'Agent not found' })
+      return true
+    }
+
+    sendJson(res, 200, agent)
+    return true
+  }
+
+  if (req.method === 'DELETE') {
+    const deleted = await platform.agents.delete(agentId)
+    if (!deleted) {
+      sendJson(res, 404, { error: 'Agent not found' })
+      return true
+    }
+
+    sendJson(res, 200, { deleted: true })
+    return true
+  }
+
+  return false
+}
+
+async function handlePlatformSessions(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'POST' && pathname === '/v1/sessions') {
+    const body = createPlatformSessionRequestSchema.parse(await readJson(req))
+    const agent = await platform.agents.get(body.agentId)
+    if (!agent) {
+      sendJson(res, 404, { error: 'Agent not found' })
+      return true
+    }
+
+    const session = await platform.sessions.create({ agentId: body.agentId })
+    sendJson(res, 201, session)
+    return true
+  }
+
+  if (req.method === 'GET' && pathname === '/v1/sessions') {
+    sendJson(res, 200, await platform.sessions.list())
+    return true
+  }
+
+  const sessionId = getRouteId(pathname, '/v1/sessions/')
+  if (!sessionId) {
+    return false
+  }
+
+  if (req.method === 'GET') {
+    const session = await platform.sessions.get(sessionId)
+    if (!session) {
+      sendJson(res, 404, { error: 'Session not found' })
+      return true
+    }
+
+    sendJson(res, 200, session)
+    return true
+  }
+
+  if (req.method === 'DELETE') {
+    const deleted = await platform.sessions.delete(sessionId)
+    if (!deleted) {
+      sendJson(res, 404, { error: 'Session not found' })
+      return true
+    }
+
+    sendJson(res, 200, { deleted: true })
+    return true
+  }
+
+  return false
+}
+
+async function handlePlatformRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (await handlePlatformAgents(req, res, pathname)) {
+    return true
+  }
+
+  if (await handlePlatformSessions(req, res, pathname)) {
+    return true
+  }
+
+  return false
+}
+
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
@@ -220,6 +368,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         ok: true,
         sessions: sessions.size,
       })
+      return
+    }
+
+    if (url.pathname.startsWith('/v1/')) {
+      if (await handlePlatformRequest(req, res, url.pathname)) {
+        return
+      }
+
+      sendJson(res, 404, { error: 'Not Found' })
       return
     }
 
@@ -258,6 +415,15 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
         'POST /chat/stream',
         'POST /sessions',
         'DELETE /sessions/:id',
+        'POST /v1/agents',
+        'GET /v1/agents',
+        'GET /v1/agents/:id',
+        'PATCH /v1/agents/:id',
+        'DELETE /v1/agents/:id',
+        'POST /v1/sessions',
+        'GET /v1/sessions',
+        'GET /v1/sessions/:id',
+        'DELETE /v1/sessions/:id',
       ],
     })
   } catch (error) {
@@ -277,6 +443,6 @@ const host = process.env.HOST ?? '0.0.0.0'
 createServer(handleRequest).listen(port, host, () => {
   console.log(`Agent HTTP server listening on http://${host}:${port}`)
   console.log(
-    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id',
+    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions',
   )
 })
