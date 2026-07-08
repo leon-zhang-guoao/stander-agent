@@ -6,7 +6,7 @@ sessions/
 config.json
 .opencode/
 .sisyphus/
-.worktrees/
+.worktrees
 *.log
 .env
 .env.*
