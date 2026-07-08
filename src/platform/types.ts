@@ -158,6 +158,29 @@ export type WorkflowDefinition = {
   updatedAt: string
 }
 
+export type WorkflowExport = Omit<WorkflowDefinition, 'id' | 'createdAt' | 'updatedAt'> & {
+  id?: string
+  exportedAt: string
+}
+
+export type WorkflowTemplateSummary = {
+  id: string
+  name: string
+  description: string
+  kind: WorkflowKind
+  nodeLabels: string[]
+}
+
+export type WorkflowRunSummary = {
+  sessionId: string
+  runId: string
+  status: SessionStatus | string
+  startedAt: string
+  completedAt?: string
+  error?: string
+  outputPreview?: string
+}
+
 export type CreateWorkflowInput = {
   name: string
   description?: string

@@ -10,7 +10,9 @@
     <main class="console-shell">
       <aside class="sidebar" aria-label="平台导航">
         <header class="brand">
-          <div class="brand-mark" aria-hidden="true">SA</div>
+          <div class="brand-mark" aria-hidden="true">
+            <span></span>
+          </div>
           <div>
             <h1>Stander Console</h1>
             <p id="connectionLabel">正在连接平台</p>
@@ -19,11 +21,11 @@
         </header>
 
         <nav class="nav-tabs" aria-label="主导航">
-          <button class="nav-tab" type="button" data-tab="providers">Providers</button>
-          <button class="nav-tab" type="button" data-tab="mcp">MCP</button>
-          <button class="nav-tab" type="button" data-tab="agents">Agents</button>
-          <button class="nav-tab" type="button" data-tab="runs">Workflows</button>
-          <button class="nav-tab" type="button" data-tab="registries">Tools / Skills</button>
+          <button class="nav-tab" type="button" data-tab="providers"><span>01</span>Providers</button>
+          <button class="nav-tab" type="button" data-tab="mcp"><span>02</span>MCP</button>
+          <button class="nav-tab" type="button" data-tab="agents"><span>03</span>Agents</button>
+          <button class="nav-tab" type="button" data-tab="runs"><span>04</span>Workflows</button>
+          <button class="nav-tab" type="button" data-tab="registries"><span>05</span>Tools / Skills</button>
         </nav>
 
         <section class="sidebar-section">
@@ -52,6 +54,25 @@
             </div>
           </div>
         </header>
+
+        <section class="signal-strip" aria-label="平台概览">
+          <div>
+            <span>Providers</span>
+            <strong id="providersMetric">0</strong>
+          </div>
+          <div>
+            <span>Agents</span>
+            <strong id="agentsMetric">0</strong>
+          </div>
+          <div>
+            <span>Sessions</span>
+            <strong id="sessionsMetric">0</strong>
+          </div>
+          <div>
+            <span>Events</span>
+            <strong id="eventsMetric">0</strong>
+          </div>
+        </section>
 
         <div id="notice" class="notice" hidden></div>
         <div id="timeline" class="timeline" aria-live="polite"></div>
@@ -307,9 +328,21 @@
             <div class="form-actions">
               <button type="submit">保存 workflow</button>
               <button id="duplicateWorkflowButton" class="secondary-button" type="button">复制</button>
+              <button id="exportWorkflowButton" class="secondary-button" type="button">Export JSON</button>
               <button id="deleteWorkflowButton" class="danger-button" type="button">删除</button>
             </div>
           </form>
+          <div class="config-form">
+            <fieldset>
+              <legend>Templates</legend>
+              <div id="workflowTemplatesList" class="template-list"></div>
+            </fieldset>
+            <label>
+              Import JSON
+              <textarea id="workflowImportJson" rows="5" placeholder="粘贴 workflow export JSON"></textarea>
+            </label>
+            <button id="importWorkflowButton" class="secondary-button" type="button">Import JSON</button>
+          </div>
           <form id="workflowRunForm" class="config-form">
             <label>
               Run Input
@@ -317,6 +350,12 @@
             </label>
             <button type="submit">运行 workflow</button>
           </form>
+          <div class="config-form">
+            <fieldset>
+              <legend>Run History</legend>
+              <div id="workflowRunsList" class="run-history-list"></div>
+            </fieldset>
+          </div>
           <pre id="runResult" class="result-box" hidden></pre>
         </section>
 

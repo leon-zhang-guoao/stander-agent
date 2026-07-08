@@ -562,9 +562,17 @@ M5 introduced Graph and Swarm as experiment APIs. M7 sessionizes those runs: eac
 
 ### M9: Workflow Operations
 
+- Add workflow import/export for portable workflow definitions
+- Add built-in workflow templates for common Graph/Swarm starting points
+- Add workflow run history derived from session metadata and event log
+- Improve Console workflow run status and timeline visibility
+- Keep node-level live streaming deferred to M10 while the Graph/Swarm event contract matures
+
+### M10: Node-Level Workflow Streaming
+
 - Decide whether node-level live streaming becomes part of the platform event contract
-- Add workflow templates and import/export
-- Add workflow run history filters and stronger governance
+- Explore replacing or wrapping Graph/Swarm execution to surface node start/progress/end events
+- Add richer run filters, workflow templates, and governance only after the run event model is stable
 
 ## Non-Goals for the First Platform Version
 

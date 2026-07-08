@@ -131,6 +131,15 @@ export const createWorkflowRequestSchema = z.object({
   maxSteps: z.number().int().positive().optional(),
 })
 
+export const importWorkflowRequestSchema = createWorkflowRequestSchema
+  .extend({
+    id: z.string().optional(),
+    createdAt: z.string().optional(),
+    updatedAt: z.string().optional(),
+    exportedAt: z.string().optional(),
+  })
+  .passthrough()
+
 export const patchWorkflowRequestSchema = createWorkflowRequestSchema.partial().refine(
   (patch) => Object.keys(patch).length > 0,
   { message: 'Patch body must contain at least one field' },

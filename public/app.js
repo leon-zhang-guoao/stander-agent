@@ -8,6 +8,8 @@ const state = {
   skills: [],
   sessions: [],
   workflows: [],
+  workflowTemplates: [],
+  workflowRuns: [],
   events: [],
   platformStatus: null,
   activeProviderId: '',
@@ -37,6 +39,10 @@ const el = {
   agentLabel: document.querySelector('#agentLabel'),
   sessionLabel: document.querySelector('#sessionLabel'),
   streamStatus: document.querySelector('#streamStatus'),
+  providersMetric: document.querySelector('#providersMetric'),
+  agentsMetric: document.querySelector('#agentsMetric'),
+  sessionsMetric: document.querySelector('#sessionsMetric'),
+  eventsMetric: document.querySelector('#eventsMetric'),
   notice: document.querySelector('#notice'),
   timeline: document.querySelector('#timeline'),
   messageForm: document.querySelector('#messageForm'),
@@ -117,9 +123,14 @@ const el = {
   workflowMaxSteps: document.querySelector('#workflowMaxSteps'),
   duplicateWorkflowButton: document.querySelector('#duplicateWorkflowButton'),
   deleteWorkflowButton: document.querySelector('#deleteWorkflowButton'),
+  exportWorkflowButton: document.querySelector('#exportWorkflowButton'),
   newWorkflowButton: document.querySelector('#newWorkflowButton'),
+  workflowTemplatesList: document.querySelector('#workflowTemplatesList'),
+  workflowImportJson: document.querySelector('#workflowImportJson'),
+  importWorkflowButton: document.querySelector('#importWorkflowButton'),
   workflowRunForm: document.querySelector('#workflowRunForm'),
   workflowRunInput: document.querySelector('#workflowRunInput'),
+  workflowRunsList: document.querySelector('#workflowRunsList'),
   runResult: document.querySelector('#runResult'),
 
   toolsList: document.querySelector('#toolsList'),
@@ -174,7 +185,17 @@ async function api(path, options = {}) {
 
 async function loadPlatform() {
   setConnection('正在加载平台数据', 'busy')
-  const [status, providers, mcpServers, agents, tools, skills, sessions, workflows] = await Promise.all([
+  const [
+    status,
+    providers,
+    mcpServers,
+    agents,
+    tools,
+    skills,
+    sessions,
+    workflows,
+    workflowTemplates,
+  ] = await Promise.all([
     api('/v1/platform/status'),
     api('/v1/model-providers'),
     api('/v1/mcp-servers'),
@@ -183,6 +204,7 @@ async function loadPlatform() {
     api('/v1/skills'),
     api('/v1/sessions'),
     api('/v1/workflows'),
+    api('/v1/workflow-templates'),
   ])
 
   state.platformStatus = status
@@ -193,7 +215,9 @@ async function loadPlatform() {
   state.skills = skills
   state.sessions = sessions
   state.workflows = workflows
+  state.workflowTemplates = workflowTemplates
   reconcileSelection()
+  await loadWorkflowRuns()
   renderAll()
 
   if (state.activeSessionId) {
@@ -222,7 +246,7 @@ function reconcileSelection() {
   }
   const agentIds = new Set(state.agents.map((agent) => agent.id))
   for (const workflow of state.workflows) {
-    workflow.nodes = workflow.nodes.filter((node) => agentIds.has(node.agentId))
+    workflow.nodes = workflow.nodes.filter((node) => !node.agentId || agentIds.has(node.agentId))
     workflow.edges = workflow.edges.filter(
       (edge) =>
         workflow.nodes.some((node) => node.id === edge.sourceNodeId) &&
@@ -235,6 +259,7 @@ function reconcileSelection() {
 function renderAll() {
   renderTabs()
   renderPlatformStatus()
+  renderMetrics()
   renderProviders()
   renderProviderForm()
   renderMcpServers()
@@ -257,6 +282,13 @@ function renderPlatformStatus() {
 
   el.platformStatusLabel.textContent = `persistence: ${status.persistence}`
   el.platformStatusLabel.title = status.database || status.dataDir || ''
+}
+
+function renderMetrics() {
+  el.providersMetric.textContent = String(state.providers.length)
+  el.agentsMetric.textContent = String(state.agents.length)
+  el.sessionsMetric.textContent = String(state.sessions.length)
+  el.eventsMetric.textContent = String(state.events.length)
 }
 
 function setConnection(text, stateName = 'idle') {
@@ -502,6 +534,8 @@ function renderRuns() {
   renderWorkflowForm()
   renderWorkflowCanvas()
   renderWorkflowNodeInspector()
+  renderWorkflowTemplates()
+  renderWorkflowRuns()
 }
 
 function renderWorkflowList() {
@@ -524,6 +558,9 @@ function renderWorkflowList() {
       state.workflowConnectSourceId = ''
       persistUiState()
       renderAll()
+      loadWorkflowRuns()
+        .then(renderRuns)
+        .catch((error) => showNotice(error.message, 'error'))
     })
     el.workflowsList.append(item)
   }
@@ -631,6 +668,10 @@ function renderWorkflowNodeInspector() {
   const workflow = getActiveWorkflow()
   const node = getActiveWorkflowNode()
   el.workflowNodeAgent.innerHTML = ''
+  const placeholder = document.createElement('option')
+  placeholder.value = ''
+  placeholder.textContent = '选择 agent'
+  el.workflowNodeAgent.append(placeholder)
   for (const agent of state.agents) {
     const option = document.createElement('option')
     option.value = agent.id
@@ -639,11 +680,67 @@ function renderWorkflowNodeInspector() {
   }
   el.workflowNodeAgent.disabled = !node
   el.workflowNodeLabel.disabled = !node
-  el.workflowNodeAgent.value = node?.agentId || state.agents[0]?.id || ''
+  el.workflowNodeAgent.value = node?.agentId || ''
   el.workflowNodeLabel.value = node?.label || ''
 
   if (workflow?.kind === 'swarm' && node && !workflow.startNodeId) {
     workflow.startNodeId = node.id
+  }
+}
+
+function renderWorkflowTemplates() {
+  el.workflowTemplatesList.innerHTML = ''
+  if (!state.workflowTemplates.length) {
+    el.workflowTemplatesList.append(emptyBlock('暂无 workflow templates。'))
+    return
+  }
+
+  for (const template of state.workflowTemplates) {
+    const item = document.createElement('button')
+    item.className = 'template-item'
+    item.type = 'button'
+    item.innerHTML = `<strong></strong><small></small>`
+    item.querySelector('strong').textContent = template.name
+    item.querySelector('small').textContent = `${template.kind} · ${template.nodeLabels.join(' -> ')}`
+    item.addEventListener('click', () => {
+      createWorkflowFromTemplate(template.id).catch((error) => showNotice(error.message, 'error'))
+    })
+    el.workflowTemplatesList.append(item)
+  }
+}
+
+function renderWorkflowRuns() {
+  el.workflowRunsList.innerHTML = ''
+  const workflow = getActiveWorkflow()
+  if (!workflow?.id) {
+    el.workflowRunsList.append(emptyBlock('保存 workflow 后可查看 run history。'))
+    return
+  }
+
+  if (!state.workflowRuns.length) {
+    el.workflowRunsList.append(emptyBlock('还没有 run history。'))
+    return
+  }
+
+  for (const run of state.workflowRuns) {
+    const item = document.createElement('button')
+    item.className = 'run-history-item'
+    item.type = 'button'
+    item.dataset.status = run.status
+    item.innerHTML = `
+      <strong></strong>
+      <span></span>
+      <small></small>
+    `
+    item.querySelector('strong').textContent = `${run.status} · ${formatTime(run.startedAt)}`
+    item.querySelector('span').textContent = run.error || run.outputPreview || run.runId
+    item.querySelector('small').textContent = run.completedAt
+      ? `completed ${formatTime(run.completedAt)}`
+      : run.sessionId
+    item.addEventListener('click', () => {
+      selectSession(run.sessionId).catch((error) => showNotice(error.message, 'error'))
+    })
+    el.workflowRunsList.append(item)
   }
 }
 
@@ -719,6 +816,10 @@ function renderWorkspaceHeader() {
 
 function renderTimeline() {
   el.timeline.innerHTML = ''
+  renderMetrics()
+  const activeSession = getActiveSession()
+  const activeWorkflow = getSessionWorkflow(activeSession)
+  let nodeResultCount = 0
   if (!state.activeSessionId) {
     el.timeline.append(emptyTimeline('没有 active session。'))
     return
@@ -778,10 +879,11 @@ function renderTimeline() {
     } else if (event.type === 'multi_agent.run_started') {
       appendEventRow(
         'run',
-        `${event.mode} run started · ${event.nodeAgentIds?.length || 0} nodes · ${event.runId}`,
+        `${activeWorkflow?.name || activeSession?.title || event.mode} started · ${event.nodeAgentIds?.length || 0} nodes · ${event.runId}`,
         event.createdAt,
       )
     } else if (event.type === 'multi_agent.node_result') {
+      nodeResultCount += 1
       appendEventRow(
         'node-result',
         `${getAgentName(event.nodeId)} · ${event.status}${event.error ? ` · ${event.error}` : ''}${event.output ? `\n${truncateText(event.output, 900)}` : ''}`,
@@ -790,11 +892,15 @@ function renderTimeline() {
     } else if (event.type === 'multi_agent.run_completed') {
       appendEventRow(
         'run-completed',
-        `${event.mode} completed · ${event.status}${event.output ? `\n${truncateText(event.output, 1200)}` : ''}`,
+        `${activeWorkflow?.name || activeSession?.title || event.mode} completed · ${event.status} · ${nodeResultCount} node results${event.output ? `\n${truncateText(event.output, 1200)}` : ''}`,
         event.createdAt,
       )
     } else if (event.type === 'multi_agent.run_failed') {
-      appendEventRow('error', `${event.mode} failed：${event.message}`, event.createdAt)
+      appendEventRow(
+        'error',
+        `${activeWorkflow?.name || activeSession?.title || event.mode} failed · ${nodeResultCount} node results\n${event.message}`,
+        event.createdAt,
+      )
     }
   }
 
@@ -985,6 +1091,11 @@ async function runWorkflow(event) {
     showNotice('Run input 必填。', 'error')
     return
   }
+  const validationError = validateWorkflowBody(buildWorkflowBody())
+  if (validationError) {
+    showNotice(validationError, 'error')
+    return
+  }
 
   await submitWorkflowRun(workflow.id, { input })
 }
@@ -1017,6 +1128,7 @@ async function submitWorkflowRun(workflowId, body) {
     )
     state.sessions = await api('/v1/sessions')
     state.activeSessionId = result.sessionId
+    await loadWorkflowRuns()
     const session = getActiveSession()
     state.activeAgentId = session?.agentId || state.activeAgentId
     persistUiState()
@@ -1052,6 +1164,7 @@ async function saveWorkflow(event) {
   state.workflows = await api('/v1/workflows')
   state.activeWorkflowId = saved.id
   state.activeWorkflowNodeId = saved.nodes[0]?.id || ''
+  await loadWorkflowRuns()
   persistUiState()
   renderAll()
   showNotice('Workflow 已保存。', 'ok')
@@ -1084,6 +1197,10 @@ function validateWorkflowBody(body) {
   }
   if (!body.nodes.length) {
     return 'Workflow 至少需要一个节点。'
+  }
+  const missingAgentNode = body.nodes.find((node) => !node.agentId)
+  if (missingAgentNode) {
+    return `节点「${missingAgentNode.label || missingAgentNode.id}」需要选择 agent。`
   }
   if (body.kind === 'graph' && !body.edges.length) {
     return 'Graph workflow 至少需要一条连线。'
@@ -1118,6 +1235,77 @@ function newWorkflow() {
   state.activeTab = 'runs'
   persistUiState()
   renderAll()
+}
+
+async function loadWorkflowRuns() {
+  const workflow = getActiveWorkflow()
+  if (!workflow?.id) {
+    state.workflowRuns = []
+    return
+  }
+
+  state.workflowRuns = await api(`/v1/workflows/${encodeURIComponent(workflow.id)}/runs`)
+}
+
+async function createWorkflowFromTemplate(templateId) {
+  const draft = await api(`/v1/workflow-templates/${encodeURIComponent(templateId)}/create`, {
+    method: 'POST',
+  })
+  state.workflows = [draft, ...state.workflows.filter((workflow) => workflow.id)]
+  state.activeWorkflowId = ''
+  state.activeWorkflowNodeId = draft.nodes[0]?.id || ''
+  state.workflowConnectSourceId = ''
+  state.workflowRuns = []
+  state.activeTab = 'runs'
+  persistUiState()
+  renderAll()
+  showNotice('Template 已创建为草稿，请为每个节点选择 agent 后保存。', 'ok')
+}
+
+async function exportWorkflow() {
+  const workflow = getActiveWorkflow()
+  if (!workflow?.id) {
+    showNotice('请先保存 workflow，再导出 JSON。', 'error')
+    return
+  }
+
+  const exported = await api(`/v1/workflows/${encodeURIComponent(workflow.id)}/export`)
+  const text = JSON.stringify(exported, null, 2)
+  el.runResult.hidden = false
+  el.runResult.textContent = text
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text).catch(() => undefined)
+  }
+  showNotice('Workflow export JSON 已生成。', 'ok')
+}
+
+async function importWorkflow() {
+  const raw = el.workflowImportJson.value.trim()
+  if (!raw) {
+    showNotice('请先粘贴 workflow JSON。', 'error')
+    return
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    showNotice('Import JSON 格式不合法。', 'error')
+    return
+  }
+
+  const imported = await api('/v1/workflows/import', {
+    method: 'POST',
+    body: JSON.stringify(parsed),
+  })
+  state.workflows = await api('/v1/workflows')
+  state.activeWorkflowId = imported.id
+  state.activeWorkflowNodeId = imported.nodes[0]?.id || ''
+  state.workflowRuns = []
+  el.workflowImportJson.value = ''
+  persistUiState()
+  renderAll()
+  showNotice('Workflow 已导入。', 'ok')
 }
 
 function addWorkflowNode() {
@@ -1576,6 +1764,7 @@ async function deleteWorkflow() {
   state.workflows = await api('/v1/workflows')
   state.activeWorkflowId = state.workflows[0]?.id || ''
   state.activeWorkflowNodeId = state.workflows[0]?.nodes[0]?.id || ''
+  await loadWorkflowRuns()
   persistUiState()
   renderAll()
 }
@@ -1589,6 +1778,23 @@ function updateWorkflowNodeFromInspector() {
   node.label = el.workflowNodeLabel.value.trim()
   renderWorkflowCanvas()
   renderWorkflowStartOptions()
+}
+
+async function selectSession(sessionId) {
+  state.sessions = await api('/v1/sessions')
+  const session = state.sessions.find((item) => item.id === sessionId)
+  if (!session) {
+    showNotice('Run session 不存在或已被删除。', 'error')
+    return
+  }
+
+  state.activeSessionId = session.id
+  state.activeAgentId = session.agentId || state.activeAgentId
+  persistUiState()
+  renderAll()
+  await loadEvents(session.id)
+  connectEventStream(session.id)
+  showNotice('已切换到 run session timeline。', 'ok')
 }
 
 async function showSkill(name) {
@@ -1624,8 +1830,13 @@ function getActiveWorkflowNode() {
   return workflow?.nodes.find((node) => node.id === state.activeWorkflowNodeId)
 }
 
+function getSessionWorkflow(session) {
+  const workflowId = session?.meta?.workflowId
+  return workflowId ? state.workflows.find((workflow) => workflow.id === workflowId) : undefined
+}
+
 function getWorkflowNodeTitle(node) {
-  return node.label || getAgentName(node.agentId)
+  return node.label || getAgentName(node.agentId) || '未选择 agent'
 }
 
 function selectedChecks(container) {
@@ -1821,6 +2032,12 @@ el.connectWorkflowNodeButton.addEventListener('click', toggleWorkflowConnectMode
 el.deleteWorkflowNodeButton.addEventListener('click', deleteWorkflowNode)
 el.duplicateWorkflowButton.addEventListener('click', () => {
   duplicateWorkflow().catch((error) => showNotice(error.message, 'error'))
+})
+el.exportWorkflowButton.addEventListener('click', () => {
+  exportWorkflow().catch((error) => showNotice(error.message, 'error'))
+})
+el.importWorkflowButton.addEventListener('click', () => {
+  importWorkflow().catch((error) => showNotice(error.message, 'error'))
 })
 el.deleteWorkflowButton.addEventListener('click', () => {
   deleteWorkflow().catch((error) => showNotice(error.message, 'error'))

@@ -562,9 +562,17 @@ M5 先引入 Graph 和 Swarm 实验 API。M7 将这些 run session 化：每次 
 
 ### M9：Workflow Operations
 
+- 增加 workflow import/export，支持迁移 workflow definitions
+- 增加内置 workflow templates，提供常见 Graph/Swarm 起点
+- 增加从 session metadata 和 event log 推导的 workflow run history
+- 增强 Console workflow run 状态和 timeline 展示
+- 在 Graph/Swarm event contract 成熟前，将 node-level live streaming 延后到 M10
+
+### M10：Node-Level Workflow Streaming
+
 - 决定 node-level live streaming 是否进入平台事件契约
-- 增加 workflow templates 和 import/export
-- 增加 workflow run history filters 和更强的治理能力
+- 探索替换或包装 Graph/Swarm 执行编排，以暴露 node start/progress/end events
+- 在 run event model 稳定后，再加强 run filters、workflow templates 和 governance
 
 ## 第一版非目标
 

@@ -21,6 +21,7 @@ import {
   createPlatformSessionRequestSchema,
   createWorkflowRequestSchema,
   graphRunRequestSchema,
+  importWorkflowRequestSchema,
   patchModelProviderRequestSchema,
   patchMcpServerRequestSchema,
   patchAgentRequestSchema,
@@ -42,6 +43,8 @@ import type {
   SessionEvent,
   UpdateAgentConfigInput,
   WorkflowDefinition,
+  WorkflowRunSummary,
+  WorkflowTemplateSummary,
 } from './platform/types'
 import { withTriggeredSkills } from './skills'
 
@@ -76,6 +79,54 @@ type MultiAgentSerializedResult = {
   output: string
   nodeResults: MultiAgentNodeResult[]
 }
+
+const workflowTemplates: Array<
+  WorkflowTemplateSummary & Pick<WorkflowDefinition, 'nodes' | 'edges' | 'startNodeId' | 'maxSteps'>
+> = [
+  {
+    id: 'graph-review-flow',
+    name: 'Graph Review Flow',
+    description: 'Plan -> Implement -> Review deterministic workflow skeleton.',
+    kind: 'graph',
+    nodeLabels: ['Plan', 'Implement', 'Review'],
+    nodes: [
+      { id: 'plan', agentId: '', label: 'Plan', position: { x: 42, y: 88 } },
+      { id: 'implement', agentId: '', label: 'Implement', position: { x: 242, y: 88 } },
+      { id: 'review', agentId: '', label: 'Review', position: { x: 442, y: 88 } },
+    ],
+    edges: [
+      { id: 'edge_plan_implement', sourceNodeId: 'plan', targetNodeId: 'implement' },
+      { id: 'edge_implement_review', sourceNodeId: 'implement', targetNodeId: 'review' },
+    ],
+  },
+  {
+    id: 'graph-research-flow',
+    name: 'Graph Research Flow',
+    description: 'Research -> Synthesize workflow skeleton.',
+    kind: 'graph',
+    nodeLabels: ['Research', 'Synthesize'],
+    nodes: [
+      { id: 'research', agentId: '', label: 'Research', position: { x: 86, y: 112 } },
+      { id: 'synthesize', agentId: '', label: 'Synthesize', position: { x: 330, y: 112 } },
+    ],
+    edges: [{ id: 'edge_research_synthesize', sourceNodeId: 'research', targetNodeId: 'synthesize' }],
+  },
+  {
+    id: 'swarm-brainstorm',
+    name: 'Swarm Brainstorm',
+    description: 'Multi-agent brainstorm starting point for dynamic handoff experiments.',
+    kind: 'swarm',
+    nodeLabels: ['Starter', 'Diverge', 'Critique'],
+    nodes: [
+      { id: 'starter', agentId: '', label: 'Starter', position: { x: 76, y: 80 } },
+      { id: 'diverge', agentId: '', label: 'Diverge', position: { x: 294, y: 54 } },
+      { id: 'critique', agentId: '', label: 'Critique', position: { x: 294, y: 166 } },
+    ],
+    edges: [],
+    startNodeId: 'starter',
+    maxSteps: 4,
+  },
+]
 
 const sessions = new Map<string, SessionState>()
 const eventStreamHub = new EventStreamHub()
@@ -768,6 +819,28 @@ async function handlePlatformWorkflows(
     return true
   }
 
+  if (req.method === 'POST' && pathname === '/v1/workflows/import') {
+    const body = importWorkflowRequestSchema.parse(await readJson(req))
+    const input = {
+      name: `${body.name} Imported ${new Date().toISOString().replace(/[:.]/g, '-')}`,
+      description: body.description,
+      kind: body.kind,
+      nodes: body.nodes,
+      edges: body.edges,
+      startNodeId: body.startNodeId,
+      maxSteps: body.maxSteps,
+    }
+    const validationError = await validateWorkflowDefinition(input)
+    if (validationError) {
+      sendJson(res, 400, { error: validationError })
+      return true
+    }
+
+    const workflow = await platform.workflows.create(input)
+    sendJson(res, 201, workflow)
+    return true
+  }
+
   const workflowPath = getResourceSubpath(pathname, '/v1/workflows/')
   if (!workflowPath) {
     return false
@@ -777,6 +850,26 @@ async function handlePlatformWorkflows(
 
   if (req.method === 'POST' && suffix === '/runs') {
     await handleWorkflowRun(req, res, workflowId)
+    return true
+  }
+
+  if (req.method === 'GET' && suffix === '/export') {
+    const workflow = await platform.workflows.get(workflowId)
+    if (!workflow) {
+      sendJson(res, 404, { error: 'Workflow not found' })
+      return true
+    }
+    sendJson(res, 200, createWorkflowExport(workflow))
+    return true
+  }
+
+  if (req.method === 'GET' && suffix === '/runs') {
+    const workflow = await platform.workflows.get(workflowId)
+    if (!workflow) {
+      sendJson(res, 404, { error: 'Workflow not found' })
+      return true
+    }
+    sendJson(res, 200, await listWorkflowRuns(workflow.id))
     return true
   }
 
@@ -831,6 +924,138 @@ async function handlePlatformWorkflows(
   }
 
   return false
+}
+
+async function handleWorkflowTemplates(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+) {
+  if (req.method === 'GET' && pathname === '/v1/workflow-templates') {
+    sendJson(
+      res,
+      200,
+      workflowTemplates.map(({ nodes: _nodes, edges: _edges, startNodeId: _startNodeId, maxSteps: _maxSteps, ...summary }) => summary),
+    )
+    return true
+  }
+
+  const templatePath = getResourceSubpath(pathname, '/v1/workflow-templates/')
+  if (!templatePath) {
+    return false
+  }
+
+  if (req.method === 'POST' && templatePath.suffix === '/create') {
+    const template = workflowTemplates.find((item) => item.id === templatePath.id)
+    if (!template) {
+      sendJson(res, 404, { error: 'Workflow template not found' })
+      return true
+    }
+
+    sendJson(res, 200, instantiateWorkflowTemplate(template))
+    return true
+  }
+
+  return false
+}
+
+function instantiateWorkflowTemplate(
+  template: typeof workflowTemplates[number],
+): WorkflowDefinition {
+  const timestamp = nowIso()
+  const nodeIdMap = new Map(
+    template.nodes.map((node) => [node.id, `${node.id}_${randomUUID().slice(0, 8)}`]),
+  )
+
+  return {
+    id: '',
+    name: template.name,
+    description: template.description,
+    kind: template.kind,
+    nodes: template.nodes.map((node) => ({
+      ...node,
+      id: nodeIdMap.get(node.id) ?? node.id,
+      agentId: '',
+      position: { ...node.position },
+    })),
+    edges: template.edges.map((edge) => ({
+      id: `${edge.id}_${randomUUID().slice(0, 8)}`,
+      sourceNodeId: nodeIdMap.get(edge.sourceNodeId) ?? edge.sourceNodeId,
+      targetNodeId: nodeIdMap.get(edge.targetNodeId) ?? edge.targetNodeId,
+    })),
+    startNodeId: template.startNodeId ? nodeIdMap.get(template.startNodeId) : undefined,
+    maxSteps: template.maxSteps,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+}
+
+function createWorkflowExport(workflow: WorkflowDefinition) {
+  return {
+    name: workflow.name,
+    description: workflow.description,
+    kind: workflow.kind,
+    nodes: workflow.nodes.map((node) => ({ ...node, position: { ...node.position } })),
+    edges: workflow.edges.map((edge) => ({ ...edge })),
+    startNodeId: workflow.startNodeId,
+    maxSteps: workflow.maxSteps,
+    exportedAt: nowIso(),
+  }
+}
+
+async function listWorkflowRuns(workflowId: string): Promise<WorkflowRunSummary[]> {
+  const sessions = (await platform.sessions.list()).filter(
+    (session) => session.meta?.workflowId === workflowId,
+  )
+  const summaries = await Promise.all(
+    sessions.map(async (session) => {
+      const events = await platform.events.list(session.id)
+      const started = events.find((event) => event.type === 'multi_agent.run_started')
+      const completed = [...events].reverse().find((event) => event.type === 'multi_agent.run_completed')
+      const failed = [...events].reverse().find((event) => event.type === 'multi_agent.run_failed')
+      const error = [...events].reverse().find((event) => event.type === 'session.error')
+      const runId =
+        (typeof session.meta?.runId === 'string' ? session.meta.runId : undefined) ??
+        (started?.type === 'multi_agent.run_started' ? started.runId : session.id)
+      const startedAt =
+        started?.type === 'multi_agent.run_started' ? started.createdAt : session.createdAt
+      const completedAt =
+        completed?.type === 'multi_agent.run_completed'
+          ? completed.createdAt
+          : failed?.type === 'multi_agent.run_failed'
+            ? failed.createdAt
+            : error?.type === 'session.error'
+              ? error.createdAt
+              : undefined
+      const output =
+        completed?.type === 'multi_agent.run_completed' && completed.output
+          ? completed.output
+          : undefined
+      const message =
+        failed?.type === 'multi_agent.run_failed'
+          ? failed.message
+          : error?.type === 'session.error'
+            ? error.message
+            : undefined
+
+      return {
+        sessionId: session.id,
+        runId,
+        status:
+          message
+            ? 'error'
+            : completed?.type === 'multi_agent.run_completed'
+              ? completed.status
+              : session.status,
+        startedAt,
+        completedAt,
+        error: message,
+        outputPreview: output ? truncateText(output, 240) : undefined,
+      }
+    }),
+  )
+
+  return summaries.sort((left, right) => right.startedAt.localeCompare(left.startedAt))
 }
 
 async function handleWorkflowRun(
@@ -1011,6 +1236,10 @@ function ensureModelProviderUsable(
 
 function extractBlocksText(blocks: ContentBlock[]) {
   return blocks.map((block) => (block.type === 'textBlock' ? block.text : '')).join('')
+}
+
+function truncateText(text: string, maxLength: number) {
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
 async function createExperimentAgent(
@@ -1705,6 +1934,10 @@ async function handlePlatformRequest(
   }
 
   if (await handlePlatformAgents(req, res, pathname)) {
+    return true
+  }
+
+  if (await handleWorkflowTemplates(req, res, pathname)) {
     return true
   }
 
