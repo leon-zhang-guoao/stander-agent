@@ -86,6 +86,7 @@ function cloneModelProvider(provider: ModelProviderConfig): ModelProviderConfig 
     ...provider,
     availableModels: provider.availableModels ? [...provider.availableModels] : undefined,
     capabilities: { ...provider.capabilities },
+    tls: provider.tls ? { ...provider.tls } : undefined,
   }
 }
 
@@ -177,6 +178,7 @@ function mapProvider(row: Row, apiKey?: string): ModelProviderConfig {
       jsonMode: true,
       reasoning: false,
     }),
+    tls: parseJson<ModelProviderConfig['tls'] | undefined>(row.tls, undefined),
     enabled: boolValue(row.enabled),
     createdAt: requiredString(row.createdAt),
     updatedAt: requiredString(row.updatedAt),
@@ -395,6 +397,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Pers
         defaultModelId: input.defaultModelId,
         availableModels: input.availableModels ? [...input.availableModels] : undefined,
         capabilities: { ...input.capabilities },
+        tls: input.tls ? { ...input.tls } : undefined,
         enabled: input.enabled ?? true,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -402,9 +405,9 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Pers
       db.prepare(`
         INSERT INTO model_providers (
           id, name, type, baseURL, apiKeyRef, defaultModelId,
-          availableModels, capabilities, enabled, createdAt, updatedAt
+          availableModels, capabilities, tls, enabled, createdAt, updatedAt
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         provider.id,
         provider.name,
@@ -414,6 +417,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Pers
         provider.defaultModelId ?? null,
         provider.availableModels ? json(provider.availableModels) : null,
         json(provider.capabilities),
+        provider.tls ? json(provider.tls) : null,
         provider.enabled ? 1 : 0,
         provider.createdAt,
         provider.updatedAt,
@@ -469,6 +473,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Pers
         ...patch,
         apiKey: patch.apiKey ?? existing.apiKey,
         capabilities: patch.capabilities ? { ...patch.capabilities } : existing.capabilities,
+        tls: patch.tls ? { ...patch.tls } : existing.tls,
         availableModels: patch.availableModels
           ? [...patch.availableModels]
           : existing.availableModels,
@@ -477,7 +482,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Pers
       db.prepare(`
         UPDATE model_providers SET
           name = ?, type = ?, baseURL = ?, apiKeyRef = ?, defaultModelId = ?,
-          availableModels = ?, capabilities = ?, enabled = ?, updatedAt = ?
+          availableModels = ?, capabilities = ?, tls = ?, enabled = ?, updatedAt = ?
         WHERE id = ?
       `).run(
         updated.name,
@@ -487,6 +492,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Pers
         updated.defaultModelId ?? null,
         updated.availableModels ? json(updated.availableModels) : null,
         json(updated.capabilities),
+        updated.tls ? json(updated.tls) : null,
         updated.enabled ? 1 : 0,
         updated.updatedAt,
         id,

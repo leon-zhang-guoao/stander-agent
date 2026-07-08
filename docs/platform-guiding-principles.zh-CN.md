@@ -566,9 +566,17 @@ M5 先引入 Graph 和 Swarm 实验 API。M7 将这些 run session 化：每次 
 - 增加内置 workflow templates，提供常见 Graph/Swarm 起点
 - 增加从 session metadata 和 event log 推导的 workflow run history
 - 增强 Console workflow run 状态和 timeline 展示
-- 在 Graph/Swarm event contract 成熟前，将 node-level live streaming 延后到 M10
+- 将 node-level live streaming 延后到 platform/harness boundary hardening 稳定 event contract 之后
 
-### M10：Node-Level Workflow Streaming
+### M10：Platform/Harness Boundary Hardening
+
+- 将 prompt assembly 移入平台模块
+- 增加 event-to-model-context projection
+- 给 `SessionEvent` 增加 optional event ids 和 tool-use correlation ids
+- 增加 `agent.thread_context_compacted` 作为 durable compaction marker
+- 将平台组装的 `systemPrompt` 和 derived `modelContext` 传入 Strands runtime
+
+### M11：Node-Level Workflow Streaming
 
 - 决定 node-level live streaming 是否进入平台事件契约
 - 探索替换或包装 Graph/Swarm 执行编排，以暴露 node start/progress/end events

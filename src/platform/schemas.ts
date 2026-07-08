@@ -33,6 +33,10 @@ const modelProviderCapabilitiesSchema = z.object({
   reasoning: z.boolean(),
 })
 
+const modelProviderTlsSchema = z.object({
+  allowSelfSignedCertificates: z.boolean().optional(),
+})
+
 export const createModelProviderRequestSchema = z.object({
   name: z.string().min(1),
   type: z.enum([
@@ -49,6 +53,7 @@ export const createModelProviderRequestSchema = z.object({
   defaultModelId: z.string().min(1).optional(),
   availableModels: z.array(z.string().min(1)).optional(),
   capabilities: modelProviderCapabilitiesSchema,
+  tls: modelProviderTlsSchema.optional(),
   enabled: z.boolean().optional(),
 })
 

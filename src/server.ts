@@ -12,8 +12,10 @@ import {
   isToolResultEvent,
 } from './agent'
 import { EventStreamHub } from './platform/event-stream-hub'
+import { deriveModelContext } from './platform/context-projection'
 import { LocalWorkspaceSandbox } from './platform/local-workspace-sandbox'
 import { createPlatformPersistence } from './platform/persistence-factory'
+import { composePlatformPrompt } from './platform/prompt'
 import {
   createAgentRequestSchema,
   createModelProviderRequestSchema,
@@ -31,6 +33,8 @@ import {
   workflowRunRequestSchema,
 } from './platform/schemas'
 import { listMcpTools } from './platform/mcp-runtime'
+import { createProviderFetch } from './platform/model-provider-tls'
+import { createSessionEvent } from './platform/session-events'
 import { createFileSkillRegistry } from './platform/skill-registry'
 import { StrandsRuntime } from './platform/strands-runtime'
 import { createBuiltinToolRegistry } from './platform/tool-registry'
@@ -636,7 +640,8 @@ async function handleTestModelProvider(res: ServerResponse, providerId: string) 
   const modelsUrl = new URL('models', provider.baseURL.endsWith('/') ? provider.baseURL : `${provider.baseURL}/`)
 
   try {
-    const response = await fetch(modelsUrl, {
+    const providerFetch = createProviderFetch(provider) ?? fetch
+    const response = await providerFetch(modelsUrl, {
       headers: {
         Authorization: `Bearer ${apiKey}`,
       },
@@ -1674,10 +1679,6 @@ function getSessionSubpath(pathname: string) {
   }
 }
 
-function createSessionEvent(event: SessionEvent) {
-  return event
-}
-
 function appendEvent(sessionId: string, event: SessionEvent) {
   return platform.events.append(sessionId, createSessionEvent(event))
 }
@@ -1802,9 +1803,19 @@ async function handlePostPlatformSessionMessage(
       createdAt: new Date().toISOString(),
     }
 
+    const previousEvents = await platform.events.list(sessionId)
     turnEvents.push(userEvent)
     await appendEvent(sessionId, userEvent)
     const runningSession = await updatePlatformSessionStatus(sessionId, 'running', turnEvents)
+    const events = await platform.events.list(sessionId)
+    const defaultSkills = await skillRegistry.resolve(agent.skills)
+    const triggeredSkills = await skillRegistry.resolveTriggered(body.message)
+    const systemPrompt = composePlatformPrompt({
+      agent,
+      defaultSkills,
+      triggeredSkills,
+    })
+    const modelContext = deriveModelContext(previousEvents)
 
     try {
       for await (const event of runtime.runMessage({
@@ -1814,7 +1825,9 @@ async function handlePostPlatformSessionMessage(
         agentTools: resolvedAgentTools,
         session: runningSession ?? session,
         message: body.message,
-        events: await platform.events.list(sessionId),
+        events,
+        systemPrompt,
+        modelContext,
       })) {
         turnEvents.push(event)
         if (event.type === 'agent.text_delta') {

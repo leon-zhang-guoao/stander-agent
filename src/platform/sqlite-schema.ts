@@ -19,6 +19,7 @@ export function initializeSqliteSchema(db: DatabaseSync) {
       defaultModelId TEXT,
       availableModels TEXT,
       capabilities TEXT NOT NULL,
+      tls TEXT,
       enabled INTEGER NOT NULL,
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL
@@ -112,5 +113,15 @@ export function initializeSqliteSchema(db: DatabaseSync) {
   }
   if (!sessionColumns.has('meta')) {
     db.exec('ALTER TABLE sessions ADD COLUMN meta TEXT;')
+  }
+
+  const providerColumns = new Set(
+    (db.prepare('PRAGMA table_info(model_providers)').all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  )
+
+  if (!providerColumns.has('tls')) {
+    db.exec('ALTER TABLE model_providers ADD COLUMN tls TEXT;')
   }
 }

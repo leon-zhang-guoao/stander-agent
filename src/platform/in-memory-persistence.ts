@@ -46,6 +46,7 @@ function cloneModelProvider(provider: ModelProviderConfig): ModelProviderConfig 
     ...provider,
     availableModels: provider.availableModels ? [...provider.availableModels] : undefined,
     capabilities: { ...provider.capabilities },
+    tls: provider.tls ? { ...provider.tls } : undefined,
   }
 }
 
@@ -183,6 +184,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
         defaultModelId: input.defaultModelId,
         availableModels: input.availableModels ? [...input.availableModels] : undefined,
         capabilities: { ...input.capabilities },
+        tls: input.tls ? { ...input.tls } : undefined,
         enabled: input.enabled ?? true,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -217,6 +219,7 @@ export function createInMemoryPersistence(options: { onEvent?: EventListener } =
         ...patch,
         apiKey: patch.apiKey ?? existing.apiKey,
         capabilities: patch.capabilities ? { ...patch.capabilities } : existing.capabilities,
+        tls: patch.tls ? { ...patch.tls } : existing.tls,
         availableModels: patch.availableModels
           ? [...patch.availableModels]
           : existing.availableModels,

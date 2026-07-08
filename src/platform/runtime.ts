@@ -5,6 +5,7 @@ import type {
   SessionEvent,
   SessionMeta,
 } from './types'
+import type { ModelContext } from './context-projection'
 
 export type RunMessageInput = {
   agent: AgentConfig
@@ -14,6 +15,8 @@ export type RunMessageInput = {
   session: SessionMeta
   message: string
   events: SessionEvent[]
+  systemPrompt?: string
+  modelContext?: ModelContext
   signal?: AbortSignal
 }
 

@@ -66,4 +66,4 @@ M9 不改变 Graph/Swarm node agent 的执行边界。Node agents 仍只使用 m
 - M9 继续使用 vanilla HTML/CSS/JS。
 - Templates 是代码内置静态模板，不做持久化 template records。
 - Run history 从 session truth 和 event log 推导。
-- Node-level live streaming 延后到 M10，因为它需要替换 Graph/Swarm 执行编排或等待 SDK 暴露 node event streams。
+- Node-level live streaming 延后到 M11，因为它需要在 platform/harness event contract 稳定后，再替换 Graph/Swarm 执行编排或等待 SDK 暴露 node event streams。

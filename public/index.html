@@ -21,75 +21,91 @@
         </header>
 
         <nav class="nav-tabs" aria-label="主导航">
-          <button class="nav-tab" type="button" data-tab="providers"><span>01</span>Providers</button>
-          <button class="nav-tab" type="button" data-tab="mcp"><span>02</span>MCP</button>
-          <button class="nav-tab" type="button" data-tab="agents"><span>03</span>Agents</button>
-          <button class="nav-tab" type="button" data-tab="runs"><span>04</span>Workflows</button>
-          <button class="nav-tab" type="button" data-tab="registries"><span>05</span>Tools / Skills</button>
+          <button class="nav-tab" type="button" data-tab="sessions"><span>01</span>Sessions</button>
+          <button class="nav-tab" type="button" data-tab="agents"><span>02</span>Agents</button>
+          <button class="nav-tab" type="button" data-tab="providers"><span>03</span>Providers</button>
+          <button class="nav-tab" type="button" data-tab="mcp"><span>04</span>MCP</button>
+          <button class="nav-tab" type="button" data-tab="runs"><span>05</span>Workflows</button>
+          <button class="nav-tab" type="button" data-tab="registries"><span>06</span>Tools / Skills</button>
         </nav>
-
-        <section class="sidebar-section">
-          <div class="section-heading">
-            <div>
-              <strong>Sessions</strong>
-              <span id="sessionCount">0 个会话</span>
-            </div>
-            <button id="createSessionButton" class="icon-button" type="button" title="新建 session" aria-label="新建 session">+</button>
-          </div>
-          <div id="sessionsList" class="session-list" aria-label="Session 列表"></div>
-        </section>
       </aside>
 
-      <section class="workspace" aria-label="Session timeline">
-        <header class="workspace-header">
-          <div>
-            <p id="agentLabel" class="eyebrow">未选择 agent</p>
-            <h2 id="sessionLabel">选择或创建一个 session</h2>
-          </div>
-          <div class="status-stack">
-            <button id="refreshButton" class="small-button" type="button">刷新 events</button>
-            <div id="streamStatus" class="status-pill" data-state="idle">
-              <span></span>
-              <strong>Idle</strong>
+      <section class="main-content" aria-label="Console workspace">
+        <div id="notice" class="notice" hidden></div>
+
+        <section id="sessionsPanel" class="panel sessions-panel" data-panel="sessions">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Runtime Sessions</p>
+              <h2>Sessions</h2>
+            </div>
+            <div class="session-create">
+              <select id="sessionAgentSelect" aria-label="选择 agent 创建 session"></select>
+              <button id="createSessionButton" class="small-button" type="button">新建 session</button>
             </div>
           </div>
-        </header>
 
-        <section class="signal-strip" aria-label="平台概览">
-          <div>
-            <span>Providers</span>
-            <strong id="providersMetric">0</strong>
-          </div>
-          <div>
-            <span>Agents</span>
-            <strong id="agentsMetric">0</strong>
-          </div>
-          <div>
-            <span>Sessions</span>
-            <strong id="sessionsMetric">0</strong>
-          </div>
-          <div>
-            <span>Events</span>
-            <strong id="eventsMetric">0</strong>
-          </div>
+          <section class="signal-strip" aria-label="平台概览">
+            <div>
+              <span>Providers</span>
+              <strong id="providersMetric">0</strong>
+            </div>
+            <div>
+              <span>Agents</span>
+              <strong id="agentsMetric">0</strong>
+            </div>
+            <div>
+              <span>Sessions</span>
+              <strong id="sessionsMetric">0</strong>
+            </div>
+            <div>
+              <span>Events</span>
+              <strong id="eventsMetric">0</strong>
+            </div>
+          </section>
+
+          <section class="sessions-workbench">
+            <aside class="sessions-browser" aria-label="Session 列表">
+              <div class="section-heading">
+                <div>
+                  <strong>Session list</strong>
+                  <span id="sessionCount">0 个会话</span>
+                </div>
+              </div>
+              <div id="sessionsList" class="session-list" aria-label="Session 列表"></div>
+            </aside>
+
+            <section class="workspace" aria-label="Session timeline">
+              <header class="workspace-header">
+                <div>
+                  <p id="agentLabel" class="eyebrow">未选择 agent</p>
+                  <h2 id="sessionLabel">选择或创建一个 session</h2>
+                </div>
+                <div class="status-stack">
+                  <button id="refreshButton" class="small-button" type="button">刷新 events</button>
+                  <div id="streamStatus" class="status-pill" data-state="idle">
+                    <span></span>
+                    <strong>Idle</strong>
+                  </div>
+                </div>
+              </header>
+
+              <div id="timeline" class="timeline" aria-live="polite"></div>
+
+              <form id="messageForm" class="composer">
+                <textarea
+                  id="messageInput"
+                  rows="1"
+                  placeholder="向当前 platform session 发送消息，也可以输入 $code-review 显式触发 skill"
+                  autocomplete="off"
+                ></textarea>
+                <button id="sendButton" class="send-button" type="submit">发送</button>
+              </form>
+            </section>
+          </section>
         </section>
 
-        <div id="notice" class="notice" hidden></div>
-        <div id="timeline" class="timeline" aria-live="polite"></div>
-
-        <form id="messageForm" class="composer">
-          <textarea
-            id="messageInput"
-            rows="1"
-            placeholder="向当前 platform session 发送消息，也可以输入 $code-review 显式触发 skill"
-            autocomplete="off"
-          ></textarea>
-          <button id="sendButton" class="send-button" type="submit">发送</button>
-        </form>
-      </section>
-
-      <aside class="inspector" aria-label="配置面板">
-        <section id="providersPanel" class="panel" data-panel="providers">
+        <section id="providersPanel" class="panel" data-panel="providers" hidden>
           <div class="panel-header">
             <div>
               <p class="eyebrow">Model Providers</p>
@@ -97,7 +113,11 @@
             </div>
             <button id="newProviderButton" class="small-button" type="button">新建</button>
           </div>
-          <div id="providersList" class="entity-list"></div>
+          <div class="config-workbench">
+            <div class="config-list-column">
+              <div id="providersList" class="entity-list"></div>
+            </div>
+            <div class="config-detail-column">
           <form id="providerForm" class="config-form">
             <input id="providerId" type="hidden" />
             <label>
@@ -148,6 +168,10 @@
               <input id="providerEnabled" type="checkbox" />
               启用 provider
             </label>
+            <label class="inline-field">
+              <input id="providerAllowSelfSignedCertificates" type="checkbox" />
+              允许自签 TLS 证书（仅本地/内网 provider）
+            </label>
             <div class="form-actions">
               <button type="submit">保存 provider</button>
               <button id="testProviderButton" class="secondary-button" type="button">测试连接</button>
@@ -155,6 +179,8 @@
             </div>
             <pre id="providerTestResult" class="result-box" hidden></pre>
           </form>
+            </div>
+          </div>
         </section>
 
         <section id="mcpPanel" class="panel" data-panel="mcp" hidden>
@@ -165,7 +191,11 @@
             </div>
             <button id="newMcpServerButton" class="small-button" type="button">新建</button>
           </div>
-          <div id="mcpServersList" class="entity-list"></div>
+          <div class="config-workbench">
+            <div class="config-list-column">
+              <div id="mcpServersList" class="entity-list"></div>
+            </div>
+            <div class="config-detail-column">
           <form id="mcpServerForm" class="config-form">
             <input id="mcpServerId" type="hidden" />
             <label>
@@ -215,6 +245,8 @@
             </div>
             <pre id="mcpServerResult" class="result-box" hidden></pre>
           </form>
+            </div>
+          </div>
         </section>
 
         <section id="agentsPanel" class="panel" data-panel="agents" hidden>
@@ -223,9 +255,16 @@
               <p class="eyebrow">Agents</p>
               <h2>Agent 配置</h2>
             </div>
-            <button id="newAgentButton" class="small-button" type="button">新建</button>
+            <div class="form-actions">
+              <button id="createAgentSessionButton" class="secondary-button" type="button">创建 session</button>
+              <button id="newAgentButton" class="small-button" type="button">新建</button>
+            </div>
           </div>
-          <div id="agentsList" class="entity-list"></div>
+          <div class="config-workbench">
+            <div class="config-list-column">
+              <div id="agentsList" class="entity-list"></div>
+            </div>
+            <div class="config-detail-column">
           <form id="agentForm" class="config-form">
             <input id="agentId" type="hidden" />
             <label>
@@ -269,6 +308,8 @@
               <button id="deleteAgentButton" class="danger-button" type="button">删除</button>
             </div>
           </form>
+            </div>
+          </div>
         </section>
 
         <section id="runsPanel" class="panel" data-panel="runs" hidden>
@@ -279,7 +320,11 @@
             </div>
             <button id="newWorkflowButton" class="small-button" type="button">新建</button>
           </div>
-          <div id="workflowsList" class="entity-list"></div>
+          <div class="config-workbench workflow-workbench">
+            <div class="config-list-column">
+              <div id="workflowsList" class="entity-list"></div>
+            </div>
+            <div class="config-detail-column">
           <form id="workflowForm" class="config-form">
             <input id="workflowId" type="hidden" />
             <label>
@@ -357,6 +402,8 @@
             </fieldset>
           </div>
           <pre id="runResult" class="result-box" hidden></pre>
+            </div>
+          </div>
         </section>
 
         <section id="registriesPanel" class="panel" data-panel="registries" hidden>
@@ -378,7 +425,7 @@
           </div>
           <pre id="skillDetail" class="skill-detail">选择一个 skill 查看 SKILL.md 内容。</pre>
         </section>
-      </aside>
+      </section>
     </main>
 
     <script src="/app.js" defer></script>

@@ -18,7 +18,7 @@ const state = {
   activeSessionId: '',
   activeWorkflowId: '',
   activeWorkflowNodeId: '',
-  activeTab: 'providers',
+  activeTab: 'sessions',
   isConnectingWorkflow: false,
   workflowConnectSourceId: '',
   workflowDragEdge: null,
@@ -34,6 +34,7 @@ const el = {
   panels: [...document.querySelectorAll('.panel')],
   sessionCount: document.querySelector('#sessionCount'),
   sessionsList: document.querySelector('#sessionsList'),
+  sessionAgentSelect: document.querySelector('#sessionAgentSelect'),
   createSessionButton: document.querySelector('#createSessionButton'),
   refreshButton: document.querySelector('#refreshButton'),
   agentLabel: document.querySelector('#agentLabel'),
@@ -61,6 +62,7 @@ const el = {
   providerApiKey: document.querySelector('#providerApiKey'),
   providerApiKeyHint: document.querySelector('#providerApiKeyHint'),
   providerEnabled: document.querySelector('#providerEnabled'),
+  providerAllowSelfSignedCertificates: document.querySelector('#providerAllowSelfSignedCertificates'),
   capStreaming: document.querySelector('#capStreaming'),
   capToolCalling: document.querySelector('#capToolCalling'),
   capVision: document.querySelector('#capVision'),
@@ -102,6 +104,7 @@ const el = {
   agentMcpServers: document.querySelector('#agentMcpServers'),
   agentChildAgents: document.querySelector('#agentChildAgents'),
   newAgentButton: document.querySelector('#newAgentButton'),
+  createAgentSessionButton: document.querySelector('#createAgentSessionButton'),
   deleteAgentButton: document.querySelector('#deleteAgentButton'),
 
   workflowsList: document.querySelector('#workflowsList'),
@@ -146,9 +149,9 @@ function restoreUiState() {
     state.activeAgentId = stored.activeAgentId || ''
     state.activeSessionId = stored.activeSessionId || ''
     state.activeWorkflowId = stored.activeWorkflowId || ''
-    state.activeTab = stored.activeTab || 'providers'
+    state.activeTab = 'sessions'
   } catch {
-    state.activeTab = 'providers'
+    state.activeTab = 'sessions'
   }
 }
 
@@ -161,7 +164,6 @@ function persistUiState() {
       activeAgentId: state.activeAgentId,
       activeSessionId: state.activeSessionId,
       activeWorkflowId: state.activeWorkflowId,
-      activeTab: state.activeTab,
     }),
   )
 }
@@ -260,6 +262,7 @@ function renderAll() {
   renderTabs()
   renderPlatformStatus()
   renderMetrics()
+  renderSessionAgentSelect()
   renderProviders()
   renderProviderForm()
   renderMcpServers()
@@ -321,6 +324,33 @@ function renderTabs() {
   }
 }
 
+function renderSessionAgentSelect() {
+  el.sessionAgentSelect.innerHTML = ''
+  if (!state.agents.length) {
+    const option = document.createElement('option')
+    option.value = ''
+    option.textContent = '先创建 agent'
+    el.sessionAgentSelect.append(option)
+    el.sessionAgentSelect.disabled = true
+    el.createSessionButton.disabled = true
+    return
+  }
+
+  for (const agent of state.agents) {
+    const option = document.createElement('option')
+    option.value = agent.id
+    option.textContent = agent.name
+    el.sessionAgentSelect.append(option)
+  }
+
+  if (!state.agents.some((agent) => agent.id === state.activeAgentId)) {
+    state.activeAgentId = state.agents[0]?.id || ''
+  }
+  el.sessionAgentSelect.value = state.activeAgentId
+  el.sessionAgentSelect.disabled = false
+  el.createSessionButton.disabled = false
+}
+
 function renderProviders() {
   el.providersList.innerHTML = ''
 
@@ -360,6 +390,7 @@ function renderProviderForm() {
     ? '已保存本地 API key。留空表示不修改；填写新值会替换当前 key。'
     : '未保存本地 API key。运行和测试会按 apiKeyRef 环境变量、OPENAI_API_KEY 的顺序回退。'
   el.providerEnabled.checked = provider?.enabled ?? true
+  el.providerAllowSelfSignedCertificates.checked = provider?.tls?.allowSelfSignedCertificates ?? false
   el.capStreaming.checked = provider?.capabilities?.streaming ?? true
   el.capToolCalling.checked = provider?.capabilities?.toolCalling ?? true
   el.capVision.checked = provider?.capabilities?.vision ?? false
@@ -472,6 +503,7 @@ function renderAgentForm() {
     },
   )
   el.deleteAgentButton.disabled = !agent
+  el.createAgentSessionButton.disabled = !agent
 }
 
 function renderChecks(container, items, selected, kind, options = {}) {
@@ -757,27 +789,33 @@ function renderSessions() {
     const agent = state.agents.find((item) => item.id === session.agentId)
     const title = session.title || agent?.name || session.agentId
     const kind = session.kind || 'agent'
-    const item = document.createElement('button')
+    const item = document.createElement('div')
     item.className = 'session-item'
-    item.type = 'button'
     item.dataset.active = session.id === state.activeSessionId ? 'true' : 'false'
     item.innerHTML = `
-      <span>
-        <strong></strong>
-        <small></small>
-      </span>
-      <b></b>
+      <button class="session-select-button" type="button">
+        <span>
+          <strong></strong>
+          <small></small>
+        </span>
+        <b></b>
+      </button>
+      <button class="session-delete-button" type="button" title="删除 session" aria-label="删除 session">×</button>
     `
     item.querySelector('strong').textContent = title
     item.querySelector('small').textContent = `${kind} · ${agent?.name || session.agentId} · ${session.id.slice(0, 8)}`
     item.querySelector('b').textContent = session.status
-    item.addEventListener('click', async () => {
+    item.querySelector('.session-select-button').addEventListener('click', async () => {
       state.activeSessionId = session.id
       state.activeAgentId = session.agentId
+      state.activeTab = 'sessions'
       persistUiState()
       renderAll()
       await loadEvents(session.id)
       connectEventStream(session.id)
+    })
+    item.querySelector('.session-delete-button').addEventListener('click', () => {
+      deleteSession(session.id).catch((error) => showNotice(error.message, 'error'))
     })
     el.sessionsList.append(item)
   }
@@ -798,15 +836,23 @@ function renderWorkspaceHeader() {
     : agent
       ? '尚未创建 session'
       : '选择或创建一个 agent'
-  el.messageInput.disabled = Boolean(session && session.kind && session.kind !== 'agent')
-  el.sendButton.disabled = state.isSending || Boolean(session && session.kind && session.kind !== 'agent')
+  const canMessage = Boolean(session && (!session.kind || session.kind === 'agent'))
+  el.messageInput.disabled = !canMessage
+  el.sendButton.disabled = state.isSending || !canMessage
+
+  el.messageForm.hidden = !canMessage
+
+  if (state.activeTab !== 'sessions') {
+    clearNotice()
+    return
+  }
 
   if (!state.providers.length) {
-    showNotice('还没有 model provider。右侧先创建 provider，再配置 agent。', 'info')
+    showNotice('还没有 model provider。请先在 Providers 页面创建 provider，再配置 agent。', 'info')
   } else if (!state.agents.length) {
-    showNotice('还没有 agent。右侧创建 agent 后即可新建 session。', 'info')
+    showNotice('还没有 agent。请先在 Agents 页面创建 agent，再新建 session。', 'info')
   } else if (!state.sessions.length) {
-    showNotice('还没有 session。点击左侧 + 基于当前 agent 创建 session。', 'info')
+    showNotice('还没有 session。请选择 agent 后点击“新建 session”。', 'info')
   } else if (!state.activeSessionId) {
     showNotice('请选择一个 session 查看事件时间线。', 'info')
   } else {
@@ -832,6 +878,7 @@ function renderTimeline() {
 
   let streamingBubble = null
   let streamingText = ''
+  const toolNamesById = new Map()
 
   for (const event of state.events) {
     if (event.type === 'agent.text_delta') {
@@ -865,9 +912,19 @@ function renderTimeline() {
     if (event.type === 'user.message') {
       appendMessageRow('user', event.text || '', event.createdAt, false)
     } else if (event.type === 'agent.tool_use') {
-      appendEventRow('tool', `工具调用：${event.name || 'unknown'}`, event.createdAt)
+      if (event.toolUseId) {
+        toolNamesById.set(event.toolUseId, event.name || 'unknown')
+      }
+      appendEventRow('tool', `工具调用：${event.name || 'unknown'}${event.toolUseId ? ` · ${event.toolUseId}` : ''}`, event.createdAt)
     } else if (event.type === 'agent.tool_result') {
-      appendEventRow('tool-result', `工具完成：${event.name || 'tool result'}`, event.createdAt)
+      const toolName = event.name || (event.toolUseId ? toolNamesById.get(event.toolUseId) : undefined) || 'tool result'
+      appendEventRow('tool-result', `工具完成：${toolName}${event.toolUseId ? ` · ${event.toolUseId}` : ''}`, event.createdAt)
+    } else if (event.type === 'agent.thread_context_compacted') {
+      appendEventRow(
+        'compaction',
+        `上下文压缩：${event.reason || 'compacted'} · ${event.compactedEventCount || 0} events\n${truncateText(event.summary || '', 900)}`,
+        event.createdAt,
+      )
     } else if (event.type === 'session.status_updated') {
       appendEventRow('status', `状态变更：${formatStatus(event.status)}`, event.updatedAt)
     } else if (event.type === 'session.error') {
@@ -1014,8 +1071,9 @@ function addEvent(event) {
   state.events.push(event)
 }
 
-async function createSession() {
-  const agent = getActiveAgent()
+async function createSession(agentId = el.sessionAgentSelect?.value || state.activeAgentId) {
+  const selectedAgentId = agentId || state.activeAgentId
+  const agent = state.agents.find((item) => item.id === selectedAgentId)
   if (!agent) {
     state.activeTab = 'agents'
     renderAll()
@@ -1030,12 +1088,59 @@ async function createSession() {
   state.sessions.unshift(session)
   state.activeSessionId = session.id
   state.activeAgentId = session.agentId
+  state.activeTab = 'sessions'
   state.events = []
   persistUiState()
   renderAll()
   await loadEvents(session.id)
   connectEventStream(session.id)
+  el.messageInput.focus()
   return session
+}
+
+async function deleteSession(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId)
+  if (!session) {
+    return
+  }
+
+  const agent = state.agents.find((item) => item.id === session.agentId)
+  const title = session.title || agent?.name || session.id.slice(0, 8)
+  if (!window.confirm(`删除 session「${title}」？该 session 的事件记录也会删除。`)) {
+    return
+  }
+
+  const wasActive = sessionId === state.activeSessionId
+  if (wasActive && state.eventSource) {
+    state.eventSource.close()
+    state.eventSource = null
+  }
+
+  await api(`/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  state.sessions = await api('/v1/sessions')
+
+  if (wasActive) {
+    state.activeSessionId = ''
+    state.events = []
+  }
+
+  reconcileSelection()
+  const activeSession = getActiveSession()
+  if (activeSession) {
+    state.activeAgentId = activeSession.agentId || state.activeAgentId
+  }
+  state.activeTab = 'sessions'
+  persistUiState()
+  renderAll()
+
+  if (wasActive && activeSession) {
+    await loadEvents(activeSession.id)
+    connectEventStream(activeSession.id)
+  } else if (wasActive) {
+    connectEventStream('')
+  }
+
+  showNotice('Session 已删除。', 'ok')
 }
 
 async function ensureActiveSession() {
@@ -1128,6 +1233,7 @@ async function submitWorkflowRun(workflowId, body) {
     )
     state.sessions = await api('/v1/sessions')
     state.activeSessionId = result.sessionId
+    state.activeTab = 'sessions'
     await loadWorkflowRuns()
     const session = getActiveSession()
     state.activeAgentId = session?.agentId || state.activeAgentId
@@ -1513,6 +1619,9 @@ async function saveProvider(event) {
       reasoning: el.capReasoning.checked,
     },
     enabled: el.providerEnabled.checked,
+    tls: {
+      allowSelfSignedCertificates: el.providerAllowSelfSignedCertificates.checked,
+    },
   }
 
   if (!body.name || !body.baseURL) {
@@ -1790,6 +1899,7 @@ async function selectSession(sessionId) {
 
   state.activeSessionId = session.id
   state.activeAgentId = session.agentId || state.activeAgentId
+  state.activeTab = 'sessions'
   persistUiState()
   renderAll()
   await loadEvents(session.id)
@@ -1978,8 +2088,10 @@ function updateSessionStatus(sessionId, status) {
 }
 
 function resizeInput() {
-  el.messageInput.style.height = 'auto'
-  el.messageInput.style.height = `${Math.min(el.messageInput.scrollHeight, 150)}px`
+  const baseHeight = 42
+  const maxHeight = 96
+  el.messageInput.style.height = `${baseHeight}px`
+  el.messageInput.style.height = `${Math.max(baseHeight, Math.min(el.messageInput.scrollHeight, maxHeight))}px`
 }
 
 el.tabs.forEach((tab) => {
@@ -2100,10 +2212,22 @@ el.deleteMcpServerButton.addEventListener('click', () => {
 el.deleteAgentButton.addEventListener('click', () => {
   deleteAgent().catch((error) => showNotice(error.message, 'error'))
 })
+el.createAgentSessionButton.addEventListener('click', () => {
+  createSession(state.activeAgentId).catch((error) => showNotice(error.message, 'error'))
+})
+el.sessionAgentSelect.addEventListener('change', () => {
+  state.activeAgentId = el.sessionAgentSelect.value
+  persistUiState()
+  renderAll()
+})
 el.createSessionButton.addEventListener('click', () => {
   createSession().catch((error) => showNotice(error.message, 'error'))
 })
 el.refreshButton.addEventListener('click', () => {
+  if (!state.activeSessionId) {
+    showNotice('请先选择一个 session。', 'error')
+    return
+  }
   loadEvents(state.activeSessionId)
     .then(() => connectEventStream(state.activeSessionId))
     .catch((error) => showNotice(error.message, 'error'))
@@ -2111,7 +2235,9 @@ el.refreshButton.addEventListener('click', () => {
 el.messageForm.addEventListener('submit', (event) => {
   event.preventDefault()
   const message = el.messageInput.value.trim()
-  if (!message || state.isSending) {
+  const session = getActiveSession()
+  const canMessage = Boolean(session && (!session.kind || session.kind === 'agent'))
+  if (!message || state.isSending || !canMessage) {
     return
   }
   el.messageInput.value = ''

@@ -43,6 +43,10 @@ export type ModelProviderCapabilities = {
   reasoning: boolean
 }
 
+export type ModelProviderTlsConfig = {
+  allowSelfSignedCertificates?: boolean
+}
+
 export type ModelProviderConfig = {
   id: string
   name: string
@@ -53,6 +57,7 @@ export type ModelProviderConfig = {
   defaultModelId?: string
   availableModels?: string[]
   capabilities: ModelProviderCapabilities
+  tls?: ModelProviderTlsConfig
   enabled: boolean
   hasApiKey?: boolean
   createdAt: string
@@ -68,6 +73,7 @@ export type CreateModelProviderInput = {
   defaultModelId?: string
   availableModels?: string[]
   capabilities: ModelProviderCapabilities
+  tls?: ModelProviderTlsConfig
   enabled?: boolean
 }
 
@@ -181,6 +187,10 @@ export type WorkflowRunSummary = {
   outputPreview?: string
 }
 
+export type SessionEventBase = {
+  eventId?: string
+}
+
 export type CreateWorkflowInput = {
   name: string
   description?: string
@@ -194,21 +204,44 @@ export type CreateWorkflowInput = {
 export type UpdateWorkflowInput = Partial<CreateWorkflowInput>
 
 export type SessionEvent =
-  | { type: 'session.created'; sessionId: string; agentId: string; createdAt: string }
-  | { type: 'session.deleted'; sessionId: string; deletedAt: string }
-  | {
+  | (SessionEventBase & { type: 'session.created'; sessionId: string; agentId: string; createdAt: string })
+  | (SessionEventBase & { type: 'session.deleted'; sessionId: string; deletedAt: string })
+  | (SessionEventBase & {
       type: 'session.status_updated'
       sessionId: string
       status: SessionStatus
       updatedAt: string
-    }
-  | { type: 'session.error'; sessionId: string; message: string; createdAt: string }
-  | { type: 'user.message'; sessionId: string; text: string; createdAt: string }
-  | { type: 'agent.text_delta'; sessionId: string; text: string; createdAt: string }
-  | { type: 'agent.message'; sessionId: string; text: string; createdAt: string }
-  | { type: 'agent.tool_use'; sessionId: string; name: string; createdAt: string }
-  | { type: 'agent.tool_result'; sessionId: string; name?: string; createdAt: string }
-  | {
+    })
+  | (SessionEventBase & { type: 'session.error'; sessionId: string; message: string; createdAt: string })
+  | (SessionEventBase & { type: 'user.message'; sessionId: string; text: string; createdAt: string })
+  | (SessionEventBase & { type: 'agent.text_delta'; sessionId: string; text: string; createdAt: string })
+  | (SessionEventBase & { type: 'agent.message'; sessionId: string; text: string; createdAt: string })
+  | (SessionEventBase & {
+      type: 'agent.tool_use'
+      sessionId: string
+      name: string
+      toolUseId?: string
+      input?: unknown
+      createdAt: string
+    })
+  | (SessionEventBase & {
+      type: 'agent.tool_result'
+      sessionId: string
+      name?: string
+      toolUseId?: string
+      result?: unknown
+      error?: string
+      createdAt: string
+    })
+  | (SessionEventBase & {
+      type: 'agent.thread_context_compacted'
+      sessionId: string
+      summary: string
+      compactedEventCount: number
+      reason: string
+      createdAt: string
+    })
+  | (SessionEventBase & {
       type: 'multi_agent.run_started'
       sessionId: string
       runId: string
@@ -216,8 +249,8 @@ export type SessionEvent =
       input: string
       nodeAgentIds: string[]
       createdAt: string
-    }
-  | {
+    })
+  | (SessionEventBase & {
       type: 'multi_agent.node_result'
       sessionId: string
       runId: string
@@ -227,8 +260,8 @@ export type SessionEvent =
       output: string
       error?: string
       createdAt: string
-    }
-  | {
+    })
+  | (SessionEventBase & {
       type: 'multi_agent.run_completed'
       sessionId: string
       runId: string
@@ -236,12 +269,12 @@ export type SessionEvent =
       status: string
       output: string
       createdAt: string
-    }
-  | {
+    })
+  | (SessionEventBase & {
       type: 'multi_agent.run_failed'
       sessionId: string
       runId: string
       mode: MultiAgentMode
       message: string
       createdAt: string
-    }
+    })

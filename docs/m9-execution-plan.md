@@ -66,4 +66,4 @@ M9 does not change Graph/Swarm node-agent execution boundaries. Node agents stil
 - M9 keeps vanilla HTML/CSS/JS.
 - Templates are static built-ins, not persisted template records.
 - Run history is derived from session truth and event log.
-- Node-level live streaming is deferred to M10 because it requires either different Graph/Swarm orchestration or SDK-level node event streams.
+- Node-level live streaming is deferred to M11 because it requires either different Graph/Swarm orchestration or SDK-level node event streams after the platform/harness event contract is hardened.

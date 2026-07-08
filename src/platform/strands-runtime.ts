@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { Agent, AgentResult, SlidingWindowConversationManager, tool, type Tool } from '@strands-agents/sdk'
 import { OpenAIModel } from '@strands-agents/sdk/models/openai'
+import type { MessageData } from '@strands-agents/sdk'
 import { z } from 'zod'
 import {
   getTextDelta,
@@ -7,11 +9,14 @@ import {
   isToolResultEvent,
 } from '../agent'
 import { createMcpClient } from './mcp-runtime'
+import { createProviderFetch } from './model-provider-tls'
 import type { Persistence } from './persistence'
+import { composePlatformPrompt } from './prompt'
 import type { SkillRegistry } from './skill-registry'
 import type { AgentRuntime, RunMessageInput } from './runtime'
 import type { AgentConfig, McpServerConfig, ModelProviderConfig, SessionEvent } from './types'
 import type { ToolRegistry } from './tool-registry'
+import type { ModelContext } from './context-projection'
 
 type RuntimeSessionState = {
   agent: Agent
@@ -37,11 +42,21 @@ function getProviderApiKey(provider?: ModelProviderConfig) {
   return process.env.OPENAI_API_KEY ?? ''
 }
 
+function getProviderClientConfig(config: AgentConfig, provider?: ModelProviderConfig) {
+  const providerFetch = createProviderFetch(provider)
+  return {
+    baseURL: getProviderBaseURL(config, provider),
+    ...(providerFetch ? { fetch: providerFetch } : {}),
+  }
+}
+
 function getRuntimeCacheKey(
   config: AgentConfig,
   provider: ModelProviderConfig | undefined,
   mcpServers: McpServerConfig[],
   agentTools: AgentConfig[],
+  systemPrompt: string,
+  modelContext?: ModelContext,
 ) {
   return [
     config.updatedAt,
@@ -52,6 +67,8 @@ function getRuntimeCacheKey(
     config.skills.join(','),
     mcpServers.map((server) => `${server.id}:${server.updatedAt}`).join(','),
     agentTools.map((agent) => `${agent.id}:${agent.updatedAt}`).join(','),
+    systemPrompt,
+    JSON.stringify(modelContext?.messages ?? []),
   ].join('|')
 }
 
@@ -61,18 +78,11 @@ function extractResultText(result: AgentResult) {
     .join('')
 }
 
-function renderSkillContext(skills: { name: string; content: string }[]) {
-  if (!skills.length) {
-    return ''
-  }
-
-  return skills
-    .map(
-      (skill) => `## Skill: ${skill.name}
-
-${skill.content}`,
-    )
-    .join('\n\n---\n\n')
+function toStrandsMessages(modelContext?: ModelContext): MessageData[] {
+  return (modelContext?.messages ?? []).map((message) => ({
+    role: message.role,
+    content: [{ text: message.text }],
+  }))
 }
 
 async function createStrandsAgent(
@@ -80,6 +90,8 @@ async function createStrandsAgent(
   provider: ModelProviderConfig | undefined,
   mcpServers: McpServerConfig[],
   agentTools: AgentConfig[],
+  systemPrompt: string,
+  modelContext: ModelContext | undefined,
   toolRegistry: ToolRegistry,
   skillRegistry: SkillRegistry,
   persistence: Persistence,
@@ -89,15 +101,6 @@ async function createStrandsAgent(
     windowSize: 40,
     shouldTruncateResults: true,
   })
-  const assignedSkills = await skillRegistry.resolve(config.skills)
-  const skillContext = renderSkillContext(assignedSkills)
-  const systemPrompt = skillContext
-    ? `${config.systemPrompt}
-
-以下是这个 agent 默认启用的 skills，请持续遵循这些 skill 的说明。
-
-${skillContext}`
-    : config.systemPrompt
 
   const mcpClients = mcpServers.map(createMcpClient)
   try {
@@ -115,11 +118,10 @@ ${skillContext}`
       api: 'chat',
       modelId: config.modelId,
       apiKey: getProviderApiKey(provider) || 'missing-api-key',
-      clientConfig: {
-        baseURL: getProviderBaseURL(config, provider),
-      },
+      clientConfig: getProviderClientConfig(config, provider),
     }),
     systemPrompt,
+    messages: toStrandsMessages(modelContext),
     tools: [...toolRegistry.resolve(config.tools), ...mcpClients, ...childAgentTools],
     conversationManager,
     printer: false,
@@ -146,11 +148,14 @@ function createAgentTools(
           ? await persistence.modelProviders.getWithSecret(childAgent.modelProviderId)
           : undefined
         const childMcpServers = await resolveEnabledMcpServers(childAgent, persistence)
+        const defaultSkills = await skillRegistry.resolve(childAgent.skills)
         const { agent, mcpClients } = await createStrandsAgent(
           childAgent,
           provider,
           childMcpServers,
           [],
+          composePlatformPrompt({ agent: childAgent, defaultSkills }),
+          undefined,
           toolRegistry,
           skillRegistry,
           persistence,
@@ -200,9 +205,11 @@ export class StrandsRuntime implements AgentRuntime {
     provider: ModelProviderConfig | undefined,
     mcpServers: McpServerConfig[],
     agentTools: AgentConfig[],
+    systemPrompt: string,
+    modelContext: ModelContext | undefined,
     sessionId: string,
   ) {
-    const cacheKey = getRuntimeCacheKey(agentConfig, provider, mcpServers, agentTools)
+    const cacheKey = getRuntimeCacheKey(agentConfig, provider, mcpServers, agentTools, systemPrompt, modelContext)
     const existing = this.sessions.get(sessionId)
     if (existing?.cacheKey === cacheKey) {
       return existing.agent
@@ -217,6 +224,8 @@ export class StrandsRuntime implements AgentRuntime {
       provider,
       mcpServers,
       agentTools,
+      systemPrompt,
+      modelContext,
       this.toolRegistry,
       this.skillRegistry,
       this.persistence,
@@ -236,22 +245,14 @@ export class StrandsRuntime implements AgentRuntime {
       input.modelProvider,
       input.mcpServers ?? [],
       input.agentTools ?? [],
+      input.systemPrompt ?? input.agent.systemPrompt,
+      input.modelContext,
       input.session.id,
     )
-    const triggeredSkills = await this.skillRegistry.resolveTriggered(input.message)
-    const triggeredContext = renderSkillContext(triggeredSkills)
-    const message = triggeredContext
-      ? `以下是本轮用户显式触发的 skill，请优先遵循这些 skill 的说明完成任务。
-
-${triggeredContext}
-
----
-
-用户原始消息:
-${input.message}`
-      : input.message
-    const stream = agent.stream(message, { cancelSignal: input.signal })
+    const stream = agent.stream(input.message, { cancelSignal: input.signal })
     let answer = ''
+    let activeToolUseId: string | undefined
+    let activeToolName: string | undefined
 
     for await (const event of stream) {
       const text = getTextDelta(event)
@@ -266,18 +267,25 @@ ${input.message}`
           createdAt: nowIso(),
         }
       } else if (toolName) {
+        activeToolUseId = `tool-${randomUUID()}`
+        activeToolName = toolName
         yield {
           type: 'agent.tool_use',
           sessionId: input.session.id,
           name: toolName,
+          toolUseId: activeToolUseId,
           createdAt: nowIso(),
         }
       } else if (isToolResultEvent(event)) {
         yield {
           type: 'agent.tool_result',
           sessionId: input.session.id,
+          name: activeToolName,
+          toolUseId: activeToolUseId,
           createdAt: nowIso(),
         }
+        activeToolUseId = undefined
+        activeToolName = undefined
       }
     }
 

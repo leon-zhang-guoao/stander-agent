@@ -566,9 +566,17 @@ M5 introduced Graph and Swarm as experiment APIs. M7 sessionizes those runs: eac
 - Add built-in workflow templates for common Graph/Swarm starting points
 - Add workflow run history derived from session metadata and event log
 - Improve Console workflow run status and timeline visibility
-- Keep node-level live streaming deferred to M10 while the Graph/Swarm event contract matures
+- Keep node-level live streaming deferred until after platform/harness boundary hardening stabilizes the event contract
 
-### M10: Node-Level Workflow Streaming
+### M10: Platform/Harness Boundary Hardening
+
+- Move prompt assembly into a platform module
+- Add event-to-model-context projection
+- Add optional event ids and tool-use correlation ids to `SessionEvent`
+- Add `agent.thread_context_compacted` as a durable compaction marker
+- Pass platform-composed `systemPrompt` and derived `modelContext` into the Strands runtime
+
+### M11: Node-Level Workflow Streaming
 
 - Decide whether node-level live streaming becomes part of the platform event contract
 - Explore replacing or wrapping Graph/Swarm execution to surface node start/progress/end events
