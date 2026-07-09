@@ -4,6 +4,8 @@ export type RuntimeClientConfig = {
   baseUrl: string
   token: string
   modelId: string
+  agentId?: string
+  sessionSource?: string
 }
 
 export function createRuntimeClientConfig(env: NodeJS.ProcessEnv = process.env): RuntimeClientConfig {
@@ -21,6 +23,8 @@ export function createRuntimeClientConfig(env: NodeJS.ProcessEnv = process.env):
     baseUrl,
     token,
     modelId: env.STANDER_MODEL || 'azure-gpt-o4-mini',
+    agentId: env.STANDER_AGENT_ID,
+    sessionSource: env.STANDER_SESSION_SOURCE,
   }
 }
 
@@ -40,6 +44,8 @@ export class StanderRuntimeClient {
       body: JSON.stringify({
         cwd: input.cwd,
         modelId: this.config.modelId,
+        agentId: this.config.agentId,
+        source: this.config.sessionSource,
       }),
     })
     return this.readJsonResponse<{ sessionId: string }>(response)

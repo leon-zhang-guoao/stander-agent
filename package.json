@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "node node_modules/typescript/bin/tsc && node dist/main.js",
-    "dev:server": "node node_modules/typescript/bin/tsc && node dist/server.js",
+    "dev:server": "node --import tsx src/server-cli.ts",
     "dev:runtime": "node --import tsx src/cli.ts runtime",
     "dev:acp": "node --import tsx src/cli.ts acp",
     "build": "node node_modules/typescript/bin/tsc --noEmit",
@@ -16,7 +16,8 @@
     "test:console-ui": "node src/platform/console-ui-structure.test.mjs",
     "test:acp": "node --import tsx src/acp/acp-boundary.test.ts",
     "test:runtime-service": "node --import tsx src/runtime-service/runtime-service-boundary.test.ts",
-    "test": "npm run test:platform-boundary && npm run test:console-ui && npm run test:acp && npm run test:runtime-service && npm run build"
+    "test:unified-server": "node --import tsx src/unified-server-boundary.test.ts",
+    "test": "npm run test:platform-boundary && npm run test:console-ui && npm run test:acp && npm run test:runtime-service && npm run test:unified-server && npm run build"
   },
   "keywords": [],
   "author": "",

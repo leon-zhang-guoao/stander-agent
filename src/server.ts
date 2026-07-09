@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -16,6 +16,7 @@ import { deriveModelContext } from './platform/context-projection'
 import { LocalWorkspaceSandbox } from './platform/local-workspace-sandbox'
 import { createPlatformPersistence } from './platform/persistence-factory'
 import { composePlatformPrompt } from './platform/prompt'
+import type { AgentRuntime } from './platform/runtime'
 import {
   createAgentRequestSchema,
   createModelProviderRequestSchema,
@@ -38,6 +39,7 @@ import { createSessionEvent } from './platform/session-events'
 import { createFileSkillRegistry } from './platform/skill-registry'
 import { StrandsRuntime } from './platform/strands-runtime'
 import { createBuiltinToolRegistry } from './platform/tool-registry'
+import { createStanderRuntimeRequestHandler } from './runtime-service/server'
 import type {
   AgentConfig,
   CreateAgentConfigInput,
@@ -71,11 +73,26 @@ type SessionState = {
 
 type PlatformSessionRun = Promise<void>
 
+type RunPlatformSessionMessageOptions = {
+  runtime: AgentRuntime
+  sessionId: string
+  message: string
+  signal?: AbortSignal
+}
+
 type MultiAgentNodeResult = {
   nodeId: string
   status: string
   output: string
   error?: string
+}
+
+export type StanderServerOptions = {
+  host?: string
+  port?: number
+  runtimeToken?: string
+  runtimeModelId?: string
+  runtime?: AgentRuntime
 }
 
 type MultiAgentSerializedResult = {
@@ -1585,6 +1602,7 @@ async function handlePlatformSessions(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
+  requestRuntime: AgentRuntime,
 ) {
   if (req.method === 'POST' && pathname === '/v1/sessions') {
     const body = createPlatformSessionRequestSchema.parse(await readJson(req))
@@ -1612,7 +1630,7 @@ async function handlePlatformSessions(
   const { sessionId, suffix } = sessionPath
 
   if (req.method === 'POST' && suffix === '/messages') {
-    await handlePostPlatformSessionMessage(req, res, sessionId)
+    await handlePostPlatformSessionMessage(req, res, sessionId, requestRuntime)
     return true
   }
 
@@ -1702,11 +1720,10 @@ async function updatePlatformSessionStatus(
 }
 
 async function failPlatformSessionPreflight(
-  res: ServerResponse,
   sessionId: string,
   statusCode: number,
   message: string,
-) {
+): Promise<{ ok: false; statusCode: number; error: string }> {
   const errorEvent: SessionEvent = {
     type: 'session.error',
     sessionId,
@@ -1715,66 +1732,84 @@ async function failPlatformSessionPreflight(
   }
   await appendEvent(sessionId, errorEvent)
   await updatePlatformSessionStatus(sessionId, 'error')
-  sendJson(res, statusCode, { error: message })
+  return { ok: false, statusCode, error: message }
 }
 
 async function handlePostPlatformSessionMessage(
   req: IncomingMessage,
   res: ServerResponse,
   sessionId: string,
+  requestRuntime: AgentRuntime,
 ) {
   const body = postSessionMessageRequestSchema.parse(await readJson(req))
-  const session = await platform.sessions.get(sessionId)
-  if (!session) {
-    sendJson(res, 404, { error: 'Session not found' })
+  const result = await runPlatformSessionMessage({
+    runtime: requestRuntime,
+    sessionId,
+    message: body.message,
+  })
+  if (!result.ok) {
+    sendJson(res, result.statusCode, { error: result.error })
     return
   }
 
+  sendJson(res, 200, {
+    sessionId,
+    events: result.events,
+    answer: result.answer,
+  })
+}
+
+async function runPlatformSessionMessage({
+  runtime: requestRuntime,
+  sessionId,
+  message,
+  signal,
+}: RunPlatformSessionMessageOptions): Promise<
+  | { ok: true; events: SessionEvent[]; answer: string }
+  | { ok: false; statusCode: number; error: string }
+> {
+  const session = await platform.sessions.get(sessionId)
+  if (!session) {
+    return { ok: false, statusCode: 404, error: 'Session not found' }
+  }
+
   if (session.kind !== 'agent') {
-    sendJson(res, 400, { error: 'Session does not accept direct messages' })
-    return
+    return { ok: false, statusCode: 400, error: 'Session does not accept direct messages' }
   }
 
   const agent = await platform.agents.get(session.agentId)
   if (!agent) {
-    sendJson(res, 404, { error: 'Agent not found' })
-    return
+    return { ok: false, statusCode: 404, error: 'Agent not found' }
   }
 
   const runtimeConfig = await resolveAgentRuntimeConfig(agent)
   const missingMcpServers = getMissingIds(agent.mcpServers ?? [], runtimeConfig.mcpServers)
   if (missingMcpServers.length) {
-    await failPlatformSessionPreflight(
-      res,
+    return failPlatformSessionPreflight(
       sessionId,
       400,
       `MCP server not found: ${missingMcpServers.join(', ')}`,
     )
-    return
   }
 
   const missingAgentTools = getMissingIds(agent.agentTools ?? [], runtimeConfig.agentTools)
   if (missingAgentTools.length) {
-    await failPlatformSessionPreflight(
-      res,
+    return failPlatformSessionPreflight(
       sessionId,
       400,
       `Agent tool not found: ${missingAgentTools.join(', ')}`,
     )
-    return
   }
 
   const resolvedMcpServers = runtimeConfig.mcpServers as McpServerConfig[]
   const resolvedAgentTools = runtimeConfig.agentTools as AgentConfig[]
   const disabledMcpServers = getDisabledMcpServers(resolvedMcpServers)
   if (disabledMcpServers.length) {
-    await failPlatformSessionPreflight(
-      res,
+    return failPlatformSessionPreflight(
       sessionId,
       400,
       `MCP server is disabled: ${disabledMcpServers.map((server) => server.name).join(', ')}`,
     )
-    return
   }
 
   const modelProviderError = ensureModelProviderUsable(
@@ -1783,13 +1818,11 @@ async function handlePostPlatformSessionMessage(
     agent.tools.length + resolvedMcpServers.length + resolvedAgentTools.length,
   )
   if (modelProviderError) {
-    await failPlatformSessionPreflight(res, sessionId, 400, modelProviderError)
-    return
+    return failPlatformSessionPreflight(sessionId, 400, modelProviderError)
   }
 
   if (session.status === 'running' || platformSessionRuns.has(sessionId)) {
-    sendJson(res, 409, { error: 'Session is running' })
-    return
+    return { ok: false, statusCode: 409, error: 'Session is running' }
   }
 
   const turnEvents: SessionEvent[] = []
@@ -1799,7 +1832,7 @@ async function handlePostPlatformSessionMessage(
     const userEvent: SessionEvent = {
       type: 'user.message',
       sessionId,
-      text: body.message,
+      text: message,
       createdAt: new Date().toISOString(),
     }
 
@@ -1809,7 +1842,7 @@ async function handlePostPlatformSessionMessage(
     const runningSession = await updatePlatformSessionStatus(sessionId, 'running', turnEvents)
     const events = await platform.events.list(sessionId)
     const defaultSkills = await skillRegistry.resolve(agent.skills)
-    const triggeredSkills = await skillRegistry.resolveTriggered(body.message)
+    const triggeredSkills = await skillRegistry.resolveTriggered(message)
     const systemPrompt = composePlatformPrompt({
       agent,
       defaultSkills,
@@ -1818,16 +1851,17 @@ async function handlePostPlatformSessionMessage(
     const modelContext = deriveModelContext(previousEvents)
 
     try {
-      for await (const event of runtime.runMessage({
+      for await (const event of requestRuntime.runMessage({
         agent,
         modelProvider: runtimeConfig.modelProvider,
         mcpServers: resolvedMcpServers,
         agentTools: resolvedAgentTools,
         session: runningSession ?? session,
-        message: body.message,
+        message,
         events,
         systemPrompt,
         modelContext,
+        signal,
       })) {
         turnEvents.push(event)
         if (event.type === 'agent.text_delta') {
@@ -1861,11 +1895,7 @@ async function handlePostPlatformSessionMessage(
     platformSessionRuns.delete(sessionId)
   }
 
-  sendJson(res, 200, {
-    sessionId,
-    events: turnEvents,
-    answer,
-  })
+  return { ok: true, events: turnEvents, answer }
 }
 
 async function handleListPlatformSessionEvents(res: ServerResponse, sessionId: string) {
@@ -1928,6 +1958,7 @@ async function handlePlatformRequest(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
+  requestRuntime: AgentRuntime,
 ) {
   if (req.method === 'GET' && pathname === '/v1/platform/status') {
     sendJson(res, 200, getPlatformStatus())
@@ -1958,7 +1989,7 @@ async function handlePlatformRequest(
     return true
   }
 
-  if (await handlePlatformSessions(req, res, pathname)) {
+  if (await handlePlatformSessions(req, res, pathname, requestRuntime)) {
     return true
   }
 
@@ -1981,7 +2012,7 @@ function getPlatformStatus() {
   }
 }
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse) {
+async function handleRequest(req: IncomingMessage, res: ServerResponse, requestRuntime: AgentRuntime) {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
 
@@ -2000,7 +2031,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
     }
 
     if (url.pathname.startsWith('/v1/')) {
-      if (await handlePlatformRequest(req, res, url.pathname)) {
+      if (await handlePlatformRequest(req, res, url.pathname, requestRuntime)) {
         return
       }
 
@@ -2068,12 +2099,77 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   }
 }
 
-const port = Number(process.env.PORT ?? 3000)
-const host = process.env.HOST ?? '0.0.0.0'
+export function startStanderServer(options: StanderServerOptions = {}): Server {
+  const host = options.host ?? process.env.HOST ?? '0.0.0.0'
+  const port = options.port ?? Number(process.env.PORT ?? 3000)
+  const requestHandler = createRequestHandler({
+    runtime: options.runtime ?? runtime,
+    runtimeToken: options.runtimeToken ?? process.env.STANDER_RUNTIME_TOKEN,
+    runtimeModelId: options.runtimeModelId ?? process.env.STANDER_MODEL ?? 'azure-gpt-o4-mini',
+  })
 
-createServer(handleRequest).listen(port, host, () => {
-  console.log(`Agent HTTP server listening on http://${host}:${port}`)
-  console.log(
-    'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions, /v1/model-providers, /v1/mcp-servers, /v1/workflows, /v1/multi-agent/*',
-  )
-})
+  const server = createServer(requestHandler)
+  server.listen(port, host, () => {
+    console.log(`Agent HTTP server listening on http://${host}:${port}`)
+    console.log(
+      'Routes: GET /, GET /health, POST /chat, POST /chat/stream, POST /sessions, DELETE /sessions/:id, /v1/agents, /v1/sessions, /v1/model-providers, /v1/mcp-servers, /v1/workflows, /v1/multi-agent/*, /v1/runtime/*',
+    )
+  })
+  return server
+}
+
+function createRequestHandler(options: {
+  runtime: AgentRuntime
+  runtimeToken?: string
+  runtimeModelId?: string
+}) {
+  const runtimeHandler = createStanderRuntimeRequestHandler({
+    runtime: options.runtime,
+    token: options.runtimeToken,
+    modelId: options.runtimeModelId ?? 'azure-gpt-o4-mini',
+    platform: {
+      async createSession(input) {
+        if (!input.agentId) {
+          throw new Error('agentId is required for platform runtime sessions')
+        }
+        const agent = await platform.agents.get(input.agentId)
+        if (!agent) {
+          throw new Error('Agent not found')
+        }
+        const session = await platform.sessions.create({
+          agentId: input.agentId,
+          title: input.title,
+          meta: {
+            source: input.source ?? 'runtime',
+            cwd: input.cwd,
+            externalSessionId: input.externalSessionId,
+          },
+        })
+        return { sessionId: session.id }
+      },
+      async prompt(input) {
+        const result = await runPlatformSessionMessage({
+          runtime: options.runtime,
+          sessionId: input.sessionId,
+          message: input.text,
+          signal: input.signal,
+        })
+        if (!result.ok) {
+          throw new Error(result.error)
+        }
+        return result.events
+      },
+      cancel(sessionId) {
+        platformSessionRuns.delete(sessionId)
+      },
+    },
+  })
+
+  return async function requestHandler(req: IncomingMessage, res: ServerResponse) {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+    if (url.pathname.startsWith('/v1/') && await runtimeHandler(req, res)) {
+      return
+    }
+    await handleRequest(req, res, options.runtime)
+  }
+}

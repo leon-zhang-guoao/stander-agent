@@ -4,6 +4,14 @@ This project is evolving from a small Strands-based agent harness into an Open M
 
 Use the references below as the primary local knowledge sources before inventing new architecture or APIs.
 
+## Source Research Priority
+
+When researching this repository's source code, use CodeGraph first whenever the `.codegraph/` directory exists.
+
+- Prefer `codegraph_explore` when the MCP tool is available.
+- Otherwise use `codegraph explore "<question, file, or symbol>"` from the shell.
+- Fall back to `rg`, `sed`, or direct file reads only after CodeGraph does not provide enough context, or for non-code files that CodeGraph does not index.
+
 ## Reference Sources
 
 ### 1. `stander-agent.txt`

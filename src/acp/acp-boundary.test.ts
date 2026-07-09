@@ -176,12 +176,16 @@ test('createRuntimeClientConfig reads env with azure default model', () => {
   const config = createRuntimeClientConfig({
     STANDER_RUNTIME_URL: 'http://runtime.internal:8787/',
     STANDER_RUNTIME_TOKEN: 'secret',
+    STANDER_AGENT_ID: 'agent-managed',
+    STANDER_SESSION_SOURCE: 'tdx',
   })
 
   assert.deepEqual(config, {
     baseUrl: 'http://runtime.internal:8787',
     token: 'secret',
     modelId: 'azure-gpt-o4-mini',
+    agentId: 'agent-managed',
+    sessionSource: 'tdx',
   })
 })
 
@@ -234,6 +238,33 @@ test('StanderRuntimeClient creates sessions with bearer auth and model', async (
     const client = new StanderRuntimeClient({ baseUrl, token: 'secret', modelId: 'azure-gpt-o4-mini' })
 
     assert.deepEqual(await client.createSession({ cwd: '/tmp/work' }), { sessionId: 'runtime-session-1' })
+  })
+})
+
+test('StanderRuntimeClient forwards manager agent binding when configured', async () => {
+  await withClientServer(async (req, res) => {
+    const chunks: Buffer[] = []
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    }
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString('utf8')), {
+      cwd: '/tmp/work',
+      modelId: 'fallback-model',
+      agentId: 'agent-managed',
+      source: 'tdx',
+    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ sessionId: 'platform-session-1' }))
+  }, async (baseUrl) => {
+    const client = new StanderRuntimeClient({
+      baseUrl,
+      token: 'secret',
+      modelId: 'fallback-model',
+      agentId: 'agent-managed',
+      sessionSource: 'tdx',
+    })
+
+    assert.deepEqual(await client.createSession({ cwd: '/tmp/work' }), { sessionId: 'platform-session-1' })
   })
 })
 

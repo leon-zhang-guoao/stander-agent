@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AgentRuntime } from '../platform/runtime'
-import type { AgentConfig, SessionMeta } from '../platform/types'
+import type { AgentConfig, SessionEvent, SessionMeta } from '../platform/types'
 import type { RuntimeCreateSessionRequest, RuntimePromptRequest } from './types'
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024
@@ -10,6 +10,7 @@ type RuntimeServiceSession = {
   id: string
   cwd: string
   modelId: string
+  kind: 'standalone'
   createdAt: string
   activePrompt?: {
     id: string
@@ -17,12 +18,39 @@ type RuntimeServiceSession = {
   }
 }
 
+type RuntimePlatformSession = {
+  id: string
+  kind: 'platform'
+  createdAt: string
+  activePrompt?: {
+    id: string
+    abortController: AbortController
+  }
+}
+
+type RuntimeSession = RuntimeServiceSession | RuntimePlatformSession
+
 export type StanderRuntimeServiceOptions = {
   runtime: AgentRuntime
   token: string
   modelId: string
   host?: string
   port?: number
+}
+
+export type StanderRuntimeRequestHandlerOptions = {
+  runtime: AgentRuntime
+  token?: string
+  modelId: string
+  platform?: {
+    createSession(input: RuntimeCreateSessionRequest): Promise<{ sessionId: string }>
+    prompt(input: {
+      sessionId: string
+      text: string
+      signal?: AbortSignal
+    }): Promise<SessionEvent[]>
+    cancel(sessionId: string): Promise<void> | void
+  }
 }
 
 class RequestBodyError extends Error {
@@ -116,7 +144,11 @@ function isValidCreateSessionRequest(body: unknown): body is RuntimeCreateSessio
   }
   return (
     (body.cwd === undefined || typeof body.cwd === 'string') &&
-    (body.modelId === undefined || typeof body.modelId === 'string')
+    (body.agentId === undefined || typeof body.agentId === 'string') &&
+    (body.modelId === undefined || typeof body.modelId === 'string') &&
+    (body.title === undefined || typeof body.title === 'string') &&
+    (body.source === undefined || typeof body.source === 'string') &&
+    (body.externalSessionId === undefined || typeof body.externalSessionId === 'string')
   )
 }
 
@@ -139,34 +171,54 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-export function startStanderRuntimeService(options: StanderRuntimeServiceOptions): Server {
-  const sessions = new Map<string, RuntimeServiceSession>()
+export function createStanderRuntimeRequestHandler(options: StanderRuntimeRequestHandlerOptions) {
+  const sessions = new Map<string, RuntimeSession>()
   const token = options.token
 
-  const server = createServer(async (req, res) => {
+  return async function handleStanderRuntimeRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     try {
-      if (!isAuthorized(req, token)) {
-        sendJson(res, 401, { error: 'Unauthorized' })
-        return
+      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (!url.pathname.startsWith('/v1/runtime/')) {
+        return false
       }
 
-      const url = new URL(req.url ?? '/', 'http://localhost')
+      if (!token) {
+        sendJson(res, 503, { error: 'STANDER_RUNTIME_TOKEN is required' })
+        return true
+      }
+
+      if (!isAuthorized(req, token)) {
+        sendJson(res, 401, { error: 'Unauthorized' })
+        return true
+      }
 
       if (req.method === 'POST' && url.pathname === '/v1/runtime/sessions') {
         const body = await readJson<unknown>(req)
         if (!isValidCreateSessionRequest(body)) {
           sendJson(res, 400, { error: 'Invalid session request' })
-          return
+          return true
         }
+        if (body.agentId && options.platform) {
+          const created = await options.platform.createSession(body)
+          sessions.set(created.sessionId, {
+            id: created.sessionId,
+            kind: 'platform',
+            createdAt: nowIso(),
+          })
+          sendJson(res, 200, created)
+          return true
+        }
+
         const session: RuntimeServiceSession = {
           id: `stander-runtime-${randomUUID()}`,
           cwd: body.cwd ?? process.cwd(),
           modelId: body.modelId ?? options.modelId,
+          kind: 'standalone',
           createdAt: nowIso(),
         }
         sessions.set(session.id, session)
         sendJson(res, 200, { sessionId: session.id })
-        return
+        return true
       }
 
       const promptMatch = url.pathname.match(/^\/v1\/runtime\/sessions\/([^/]+)\/prompt$/)
@@ -174,12 +226,12 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
         const session = sessions.get(sessionIdFromMatch(promptMatch))
         if (!session) {
           sendJson(res, 404, { error: 'Session not found' })
-          return
+          return true
         }
 
         if (session.activePrompt) {
           sendJson(res, 409, { error: 'Prompt already running' })
-          return
+          return true
         }
 
         const abortController = new AbortController()
@@ -203,16 +255,28 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
           const promptText = getPromptText(body)
           if (!promptText) {
             sendJson(res, 400, { error: 'Prompt text is required' })
-            return
+            return true
           }
 
-          const runtimeEvents = options.runtime.runMessage({
-            agent: createRuntimeAgent(session.modelId),
-            session: toSessionMeta(session),
-            message: promptText,
-            events: [],
-            signal: abortController.signal,
-          })
+          let runtimeEvents: AsyncIterable<SessionEvent> | SessionEvent[]
+          if (session.kind === 'platform' && options.platform) {
+            runtimeEvents = await options.platform.prompt({
+              sessionId: session.id,
+              text: promptText,
+              signal: abortController.signal,
+            })
+          } else if (session.kind === 'standalone') {
+            runtimeEvents = options.runtime.runMessage({
+              agent: createRuntimeAgent(session.modelId),
+              session: toSessionMeta(session),
+              message: promptText,
+              events: [],
+              signal: abortController.signal,
+            })
+          } else {
+            sendJson(res, 500, { error: 'Platform runtime handler is not configured' })
+            return true
+          }
           for await (const event of runtimeEvents) {
             if (!streamingStarted) {
               writeNdjsonHeader(res)
@@ -223,7 +287,7 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
         } catch (error) {
           if (!streamingStarted && !res.headersSent) {
             sendJson(res, 500, { error: errorMessage(error) })
-            return
+            return true
           }
           if (!res.writableEnded) {
             if (!streamingStarted) {
@@ -250,7 +314,7 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
             res.end()
           }
         }
-        return
+        return true
       }
 
       const cancelMatch = url.pathname.match(/^\/v1\/runtime\/sessions\/([^/]+)\/cancel$/)
@@ -258,20 +322,35 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
         const session = sessions.get(sessionIdFromMatch(cancelMatch))
         if (!session) {
           sendJson(res, 404, { error: 'Session not found' })
-          return
+          return true
         }
         session.activePrompt?.abortController.abort()
+        if (session.kind === 'platform' && options.platform) {
+          await options.platform.cancel(session.id)
+        }
         sendJson(res, 200, { ok: true })
-        return
+        return true
       }
 
       sendJson(res, 404, { error: 'Not found' })
+      return true
     } catch (error) {
       if (error instanceof RequestBodyError) {
         sendJson(res, error.status, { error: error.message })
-        return
+        return true
       }
       sendJson(res, 500, { error: errorMessage(error) })
+      return true
+    }
+  }
+}
+
+export function startStanderRuntimeService(options: StanderRuntimeServiceOptions): Server {
+  const handleRuntimeRequest = createStanderRuntimeRequestHandler(options)
+  const server = createServer(async (req, res) => {
+    const handled = await handleRuntimeRequest(req, res)
+    if (!handled) {
+      sendJson(res, 404, { error: 'Not found' })
     }
   })
 

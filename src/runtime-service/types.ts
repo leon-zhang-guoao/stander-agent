@@ -2,7 +2,11 @@ import type { SessionEvent } from '../platform/types'
 
 export type RuntimeCreateSessionRequest = {
   cwd?: string
+  agentId?: string
   modelId?: string
+  title?: string
+  source?: string
+  externalSessionId?: string
 }
 
 export type RuntimeCreateSessionResponse = {
