@@ -27,6 +27,12 @@ export function mapSessionEventToAcpUpdate(event: SessionEvent): AcpSessionUpdat
         content: { type: 'text', text: event.text },
       }
 
+    case 'agent.message':
+      return {
+        sessionUpdate: 'agent_message',
+        content: { type: 'text', text: event.text },
+      }
+
     case 'agent.tool_use':
       return {
         sessionUpdate: 'tool_call_update',

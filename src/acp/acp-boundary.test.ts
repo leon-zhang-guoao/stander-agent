@@ -72,6 +72,15 @@ test('mapSessionEventToAcpUpdate maps text delta to agent_message_chunk', () => 
   })
 })
 
+test('mapSessionEventToAcpUpdate maps final agent messages to agent_message', () => {
+  const event: SessionEvent = { ...eventBase('agent.message'), type: 'agent.message', text: 'Final answer' }
+
+  assert.deepEqual(mapSessionEventToAcpUpdate(event), {
+    sessionUpdate: 'agent_message',
+    content: { type: 'text', text: 'Final answer' },
+  })
+})
+
 test('mapSessionEventToAcpUpdate maps tool use events to tool_call_update', () => {
   const event: SessionEvent = {
     ...eventBase('agent.tool_use'),
