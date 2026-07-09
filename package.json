@@ -10,7 +10,8 @@
     "test:platform-boundary": "node --import tsx src/platform/platform-boundary.test.ts",
     "test:console-ui": "node src/platform/console-ui-structure.test.mjs",
     "test:acp": "node --import tsx src/acp/acp-boundary.test.ts",
-    "test": "npm run test:platform-boundary && npm run test:console-ui && npm run test:acp && npm run build"
+    "test:runtime-service": "node --import tsx src/runtime-service/runtime-service-boundary.test.ts",
+    "test": "npm run test:platform-boundary && npm run test:console-ui && npm run test:acp && npm run test:runtime-service && npm run build"
   },
   "keywords": [],
   "author": "",
