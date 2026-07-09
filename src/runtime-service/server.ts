@@ -11,7 +11,10 @@ type RuntimeServiceSession = {
   cwd: string
   modelId: string
   createdAt: string
-  abortController?: AbortController
+  activePrompt?: {
+    id: string
+    abortController: AbortController
+  }
 }
 
 export type StanderRuntimeServiceOptions = {
@@ -174,20 +177,17 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
           return
         }
 
-        if (session.abortController) {
+        if (session.activePrompt) {
           sendJson(res, 409, { error: 'Prompt already running' })
           return
         }
 
-        const body = await readJson<RuntimePromptRequest>(req)
-        const promptText = getPromptText(body)
-        if (!promptText) {
-          sendJson(res, 400, { error: 'Prompt text is required' })
-          return
-        }
-
         const abortController = new AbortController()
-        session.abortController = abortController
+        const activePrompt = {
+          id: randomUUID(),
+          abortController,
+        }
+        session.activePrompt = activePrompt
         let completed = false
         let streamingStarted = false
         const abortCurrentPrompt = () => {
@@ -199,6 +199,13 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
         res.on('close', abortCurrentPrompt)
 
         try {
+          const body = await readJson<RuntimePromptRequest>(req)
+          const promptText = getPromptText(body)
+          if (!promptText) {
+            sendJson(res, 400, { error: 'Prompt text is required' })
+            return
+          }
+
           const runtimeEvents = options.runtime.runMessage({
             agent: createRuntimeAgent(session.modelId),
             session: toSessionMeta(session),
@@ -236,8 +243,8 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
           completed = true
           req.off('close', abortCurrentPrompt)
           res.off('close', abortCurrentPrompt)
-          if (session.abortController === abortController) {
-            session.abortController = undefined
+          if (session.activePrompt?.id === activePrompt.id) {
+            session.activePrompt = undefined
           }
           if (!res.writableEnded) {
             res.end()
@@ -253,7 +260,7 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
           sendJson(res, 404, { error: 'Session not found' })
           return
         }
-        session.abortController?.abort()
+        session.activePrompt?.abortController.abort()
         sendJson(res, 200, { ok: true })
         return
       }

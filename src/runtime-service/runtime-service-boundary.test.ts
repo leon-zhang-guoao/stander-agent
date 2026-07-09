@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { request } from 'node:http'
 import type { Server } from 'node:http'
 import { once } from 'node:events'
 import { startStanderRuntimeService } from './server'
@@ -333,6 +334,56 @@ test('runtime service rejects concurrent prompts for one session', async () => {
 
     runtime.complete()
     const firstResponse = await firstPrompt
+    await readNdjson(firstResponse)
+  })
+})
+
+test('runtime service reserves prompt slot before reading the full request body', async () => {
+  const runtime = new BlockingRuntime()
+  await withRuntimeServer(runtime, async (baseUrl) => {
+    const { sessionId } = await createSession(baseUrl)
+    const url = new URL(`${baseUrl}/v1/runtime/sessions/${sessionId}/prompt`)
+    const firstRequest = request(
+      {
+        method: 'POST',
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname,
+        headers: {
+          Authorization: 'Bearer secret-token',
+          'content-type': 'application/json',
+        },
+      },
+    )
+    firstRequest.write('{"text":')
+
+    const secondPrompt = await fetch(`${baseUrl}/v1/runtime/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer secret-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'second' }),
+    })
+    assert.equal(secondPrompt.status, 409)
+    assert.deepEqual(await secondPrompt.json(), { error: 'Prompt already running' })
+
+    const firstResponsePromise = new Promise<Response>((resolve, reject) => {
+      firstRequest.on('response', (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+        })
+        response.on('end', () => {
+          resolve(new Response(Buffer.concat(chunks), { status: response.statusCode }))
+        })
+      })
+      firstRequest.on('error', reject)
+    })
+
+    firstRequest.end('"first"}')
+    await runtime.started
+    runtime.complete()
+
+    const firstResponse = await firstResponsePromise
+    assert.equal(firstResponse.status, 200)
     await readNdjson(firstResponse)
   })
 })
