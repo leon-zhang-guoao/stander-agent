@@ -13,6 +13,7 @@ import {
   parseRuntimeEventLine,
   StanderRuntimeClient,
 } from './stander-runtime-client'
+import { AcpStdioServer } from './stdio-server'
 import type { SessionEvent } from '../platform/types'
 
 const tests: Array<{ name: string; fn: () => void | Promise<void> }> = []
@@ -265,6 +266,167 @@ test('StanderRuntimeClient surfaces non-ok runtime errors', async () => {
 
     await assert.rejects(() => client.createSession({}), /Runtime request failed \(500\):/)
   })
+})
+
+class FakeRuntimeClient {
+  createdSessions: Array<{ cwd?: string }> = []
+  prompts: Array<{ sessionId: string; text: string }> = []
+  cancelled: string[] = []
+
+  async createSession(input: { cwd?: string }) {
+    this.createdSessions.push(input)
+    return { sessionId: 'runtime-session-1' }
+  }
+
+  async *prompt(sessionId: string, text: string) {
+    this.prompts.push({ sessionId, text })
+    yield {
+      type: 'agent.text_delta',
+      sessionId,
+      text: 'hello',
+      createdAt: '2026-07-09T00:00:00.000Z',
+    } satisfies SessionEvent
+  }
+
+  async cancel(sessionId: string) {
+    this.cancelled.push(sessionId)
+  }
+}
+
+test('AcpStdioServer handles initialize', async () => {
+  const writes: unknown[] = []
+  const server = new AcpStdioServer({
+    runtimeClient: new FakeRuntimeClient(),
+    write: (message) => writes.push(JSON.parse(message)),
+    cwd: '/tmp/work',
+  })
+
+  await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: 1 },
+  })
+
+  assert.deepEqual(writes, [
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        protocolVersion: 1,
+        agentCapabilities: {
+          loadSession: false,
+          promptCapabilities: { image: false, embeddedContext: false },
+        },
+        authMethods: [],
+      },
+    },
+  ])
+})
+
+test('AcpStdioServer creates sessions and streams prompt updates', async () => {
+  const writes: unknown[] = []
+  const runtimeClient = new FakeRuntimeClient()
+  const server = new AcpStdioServer({
+    runtimeClient,
+    write: (message) => writes.push(JSON.parse(message)),
+    cwd: '/tmp/work',
+  })
+
+  await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'session/new',
+    params: { cwd: '/tmp/work' },
+  })
+  await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'session/prompt',
+    params: {
+      sessionId: 'runtime-session-1',
+      prompt: [{ type: 'text', text: 'hi' }],
+    },
+  })
+
+  assert.deepEqual(runtimeClient.createdSessions, [{ cwd: '/tmp/work' }])
+  assert.deepEqual(runtimeClient.prompts, [{ sessionId: 'runtime-session-1', text: 'hi' }])
+  assert.deepEqual(writes, [
+    {
+      jsonrpc: '2.0',
+      id: 2,
+      result: { sessionId: 'runtime-session-1' },
+    },
+    {
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 'runtime-session-1',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'hello' },
+        },
+      },
+    },
+    {
+      jsonrpc: '2.0',
+      id: 3,
+      result: {},
+    },
+  ])
+})
+
+test('AcpStdioServer cancels active sessions', async () => {
+  const writes: unknown[] = []
+  const runtimeClient = new FakeRuntimeClient()
+  const server = new AcpStdioServer({
+    runtimeClient,
+    write: (message) => writes.push(JSON.parse(message)),
+    cwd: '/tmp/work',
+  })
+
+  await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'session/cancel',
+    params: { sessionId: 'runtime-session-1' },
+  })
+
+  assert.deepEqual(runtimeClient.cancelled, ['runtime-session-1'])
+  assert.deepEqual(writes, [
+    {
+      jsonrpc: '2.0',
+      id: 4,
+      result: { stopReason: 'cancelled' },
+    },
+  ])
+})
+
+test('AcpStdioServer rejects prompt requests without text content', async () => {
+  const writes: unknown[] = []
+  const server = new AcpStdioServer({
+    runtimeClient: new FakeRuntimeClient(),
+    write: (message) => writes.push(JSON.parse(message)),
+    cwd: '/tmp/work',
+  })
+
+  await server.handleMessage({
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'session/prompt',
+    params: { sessionId: 'runtime-session-1', prompt: [] },
+  })
+
+  assert.deepEqual(writes, [
+    {
+      jsonrpc: '2.0',
+      id: 5,
+      error: {
+        code: -32602,
+        message: 'sessionId and text prompt are required',
+      },
+    },
+  ])
 })
 
 async function runTests() {
