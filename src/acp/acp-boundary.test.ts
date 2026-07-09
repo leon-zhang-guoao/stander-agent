@@ -8,14 +8,10 @@ import {
 import { createAcpSessionUpdateNotification, mapSessionEventToAcpUpdate } from './event-mapping'
 import type { SessionEvent } from '../platform/types'
 
-function test(name: string, fn: () => void) {
-  try {
-    fn()
-    console.log(`ok - ${name}`)
-  } catch (error) {
-    console.error(`not ok - ${name}`)
-    throw error
-  }
+const tests: Array<{ name: string; fn: () => void | Promise<void> }> = []
+
+function test(name: string, fn: () => void | Promise<void>) {
+  tests.push({ name, fn })
 }
 
 function eventBase(type: SessionEvent['type']) {
@@ -38,6 +34,8 @@ test('parseJsonRpcLine accepts request objects with numeric ids', () => {
 
 test('parseJsonRpcLine rejects invalid JSON-RPC input', () => {
   assert.equal(parseJsonRpcLine('not json'), null)
+  assert.equal(parseJsonRpcLine('null'), null)
+  assert.equal(parseJsonRpcLine('[]'), null)
   assert.equal(parseJsonRpcLine('{"jsonrpc":"2.0","id":true,"method":"session/new"}'), null)
   assert.equal(parseJsonRpcLine('{"jsonrpc":"2.0","id":1,"method":""}'), null)
   assert.equal(parseJsonRpcLine('{"jsonrpc":"1.0","id":1,"method":"session/new"}'), null)
@@ -72,16 +70,16 @@ test('mapSessionEventToAcpUpdate maps text delta to agent_message_chunk', () => 
   })
 })
 
-test('mapSessionEventToAcpUpdate maps final agent messages to agent_message', () => {
+test('mapSessionEventToAcpUpdate maps final agent messages to agent_message_chunk', () => {
   const event: SessionEvent = { ...eventBase('agent.message'), type: 'agent.message', text: 'Final answer' }
 
   assert.deepEqual(mapSessionEventToAcpUpdate(event), {
-    sessionUpdate: 'agent_message',
+    sessionUpdate: 'agent_message_chunk',
     content: { type: 'text', text: 'Final answer' },
   })
 })
 
-test('mapSessionEventToAcpUpdate maps tool use events to tool_call_update', () => {
+test('mapSessionEventToAcpUpdate maps tool use events to tool_call', () => {
   const event: SessionEvent = {
     ...eventBase('agent.tool_use'),
     type: 'agent.tool_use',
@@ -91,7 +89,7 @@ test('mapSessionEventToAcpUpdate maps tool use events to tool_call_update', () =
   }
 
   assert.deepEqual(mapSessionEventToAcpUpdate(event), {
-    sessionUpdate: 'tool_call_update',
+    sessionUpdate: 'tool_call',
     toolCallId: 'tool-1',
     title: 'read_file',
     rawInput: { path: 'README.md' },
@@ -137,11 +135,11 @@ test('mapSessionEventToAcpUpdate maps failed tool results to failed tool_call_up
   })
 })
 
-test('mapSessionEventToAcpUpdate maps session errors to agent_message', () => {
+test('mapSessionEventToAcpUpdate maps session errors to agent_message_chunk', () => {
   const event: SessionEvent = { ...eventBase('session.error'), type: 'session.error', message: 'Runtime failed' }
 
   assert.deepEqual(mapSessionEventToAcpUpdate(event), {
-    sessionUpdate: 'agent_message',
+    sessionUpdate: 'agent_message_chunk',
     content: { type: 'text', text: 'Runtime failed' },
   })
 })
@@ -165,3 +163,17 @@ test('createAcpSessionUpdateNotification returns a session update notification',
     },
   )
 })
+
+async function runTests() {
+  for (const { name, fn } of tests) {
+    try {
+      await fn()
+      console.log(`ok - ${name}`)
+    } catch (error) {
+      console.error(`not ok - ${name}`)
+      throw error
+    }
+  }
+}
+
+void runTests()

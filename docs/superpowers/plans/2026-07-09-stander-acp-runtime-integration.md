@@ -80,14 +80,10 @@ import { createJsonRpcError, createJsonRpcResult, parseJsonRpcLine } from './jso
 import { mapSessionEventToAcpUpdate } from './event-mapping'
 import type { SessionEvent } from '../platform/types'
 
+const tests: Array<{ name: string; fn: () => void | Promise<void> }> = []
+
 function test(name: string, fn: () => void | Promise<void>) {
-  Promise.resolve()
-    .then(fn)
-    .then(() => console.log(`ok - ${name}`))
-    .catch((error) => {
-      console.error(`not ok - ${name}`)
-      throw error
-    })
+  tests.push({ name, fn })
 }
 
 test('parseJsonRpcLine accepts request objects with numeric ids', () => {
@@ -101,6 +97,9 @@ test('parseJsonRpcLine accepts request objects with numeric ids', () => {
 
 test('parseJsonRpcLine rejects invalid JSON-RPC input', () => {
   assert.equal(parseJsonRpcLine('not json'), null)
+  assert.equal(parseJsonRpcLine('null'), null)
+  assert.equal(parseJsonRpcLine('[]'), null)
+  assert.equal(parseJsonRpcLine('{"jsonrpc":"2.0","id":true,"method":"initialize"}'), null)
   assert.equal(parseJsonRpcLine('{"jsonrpc":"2.0","id":1}'), null)
   assert.equal(parseJsonRpcLine('{"jsonrpc":"1.0","id":1,"method":"initialize"}'), null)
 })
@@ -135,7 +134,7 @@ test('mapSessionEventToAcpUpdate maps text delta to agent_message_chunk', () => 
   })
 })
 
-test('mapSessionEventToAcpUpdate maps tool events to tool_call_update', () => {
+test('mapSessionEventToAcpUpdate maps tool events to tool_call and tool_call_update', () => {
   const toolUse: SessionEvent = {
     type: 'agent.tool_use',
     sessionId: 'session-1',
@@ -154,7 +153,7 @@ test('mapSessionEventToAcpUpdate maps tool events to tool_call_update', () => {
   }
 
   assert.deepEqual(mapSessionEventToAcpUpdate(toolUse), {
-    sessionUpdate: 'tool_call_update',
+    sessionUpdate: 'tool_call',
     toolCallId: 'tool-1',
     title: 'read_file',
     rawInput: { path: 'README.md' },
@@ -171,7 +170,13 @@ test('mapSessionEventToAcpUpdate maps tool events to tool_call_update', () => {
   })
 })
 
-test('mapSessionEventToAcpUpdate maps session errors to agent_message', () => {
+test('mapSessionEventToAcpUpdate maps final messages and errors to agent_message_chunk', () => {
+  const messageEvent: SessionEvent = {
+    type: 'agent.message',
+    sessionId: 'session-1',
+    text: 'Final answer',
+    createdAt: '2026-07-09T00:00:00.000Z',
+  }
   const event: SessionEvent = {
     type: 'session.error',
     sessionId: 'session-1',
@@ -179,11 +184,29 @@ test('mapSessionEventToAcpUpdate maps session errors to agent_message', () => {
     createdAt: '2026-07-09T00:00:00.000Z',
   }
 
+  assert.deepEqual(mapSessionEventToAcpUpdate(messageEvent), {
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: 'Final answer' },
+  })
   assert.deepEqual(mapSessionEventToAcpUpdate(event), {
-    sessionUpdate: 'agent_message',
+    sessionUpdate: 'agent_message_chunk',
     content: { type: 'text', text: 'Runtime unavailable' },
   })
 })
+
+async function runTests() {
+  for (const { name, fn } of tests) {
+    try {
+      await fn()
+      console.log(`ok - ${name}`)
+    } catch (error) {
+      console.error(`not ok - ${name}`)
+      throw error
+    }
+  }
+}
+
+void runTests()
 ```
 
 - [ ] **Step 2: Add the test script and run it to verify it fails**
@@ -301,6 +324,12 @@ export function serializeJsonRpc(message: JsonRpcMessage) {
 
 Create `src/acp/event-mapping.ts`:
 
+For TDS `AcpTranslator` compatibility, emit only update variants it consumes in this slice:
+`agent_message_chunk`, `tool_call`, and `tool_call_update`. Map final `agent.message`
+and `session.error` text to `agent_message_chunk` so TDS displays final-only runtimes
+and errors instead of silently dropping them. The first tool event is `tool_call`; later
+results are `tool_call_update`.
+
 ```ts
 import type { SessionEvent } from '../platform/types'
 
@@ -310,11 +339,7 @@ export type AcpSessionUpdate =
       content: { type: 'text'; text: string }
     }
   | {
-      sessionUpdate: 'agent_message'
-      content: { type: 'text'; text: string }
-    }
-  | {
-      sessionUpdate: 'tool_call_update'
+      sessionUpdate: 'tool_call' | 'tool_call_update'
       toolCallId: string
       title?: string
       rawInput?: unknown
@@ -332,12 +357,12 @@ export function mapSessionEventToAcpUpdate(event: SessionEvent): AcpSessionUpdat
       }
     case 'agent.message':
       return {
-        sessionUpdate: 'agent_message',
+        sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: event.text },
       }
     case 'agent.tool_use':
       return {
-        sessionUpdate: 'tool_call_update',
+        sessionUpdate: 'tool_call',
         toolCallId: event.toolUseId ?? `${event.name}-${event.createdAt}`,
         title: event.name,
         rawInput: event.input,
@@ -355,7 +380,7 @@ export function mapSessionEventToAcpUpdate(event: SessionEvent): AcpSessionUpdat
       }
     case 'session.error':
       return {
-        sessionUpdate: 'agent_message',
+        sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: event.message },
       }
     default:

@@ -6,11 +6,7 @@ export type AcpSessionUpdate =
       content: { type: 'text'; text: string }
     }
   | {
-      sessionUpdate: 'agent_message'
-      content: { type: 'text'; text: string }
-    }
-  | {
-      sessionUpdate: 'tool_call_update'
+      sessionUpdate: 'tool_call' | 'tool_call_update'
       toolCallId: string
       title: string
       rawInput?: unknown
@@ -29,13 +25,13 @@ export function mapSessionEventToAcpUpdate(event: SessionEvent): AcpSessionUpdat
 
     case 'agent.message':
       return {
-        sessionUpdate: 'agent_message',
+        sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: event.text },
       }
 
     case 'agent.tool_use':
       return {
-        sessionUpdate: 'tool_call_update',
+        sessionUpdate: 'tool_call',
         toolCallId: event.toolUseId ?? `${event.name}-${event.createdAt}`,
         title: event.name,
         rawInput: event.input,
@@ -59,7 +55,7 @@ export function mapSessionEventToAcpUpdate(event: SessionEvent): AcpSessionUpdat
 
     case 'session.error':
       return {
-        sessionUpdate: 'agent_message',
+        sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: event.message },
       }
 
