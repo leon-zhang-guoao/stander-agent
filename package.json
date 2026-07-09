@@ -1,11 +1,16 @@
 {
-  "name": "stander-agent",
+  "name": "@stander-agent/stander-agent",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Stander Agent ACP adapter and runtime service",
+  "main": "dist/main.js",
+  "bin": {
+    "stander-agent": "dist/cli.js"
+  },
   "scripts": {
     "dev": "node node_modules/typescript/bin/tsc && node dist/main.js",
     "dev:server": "node node_modules/typescript/bin/tsc && node dist/server.js",
+    "dev:runtime": "node --import tsx src/cli.ts runtime",
+    "dev:acp": "node --import tsx src/cli.ts acp",
     "build": "node node_modules/typescript/bin/tsc --noEmit",
     "test:platform-boundary": "node --import tsx src/platform/platform-boundary.test.ts",
     "test:console-ui": "node src/platform/console-ui-structure.test.mjs",
