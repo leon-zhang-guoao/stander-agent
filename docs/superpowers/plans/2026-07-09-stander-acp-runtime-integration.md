@@ -374,8 +374,8 @@ export function mapSessionEventToAcpUpdate(event: SessionEvent): AcpSessionUpdat
         sessionUpdate: 'tool_call_update',
         toolCallId: event.toolUseId ?? `${event.name ?? 'tool'}-${event.createdAt}`,
         title: event.name,
-        rawOutput: event.error ? { error: event.error } : event.result,
-        status: event.error ? 'failed' : 'completed',
+        rawOutput: event.error !== undefined ? { error: event.error } : event.result,
+        status: event.error !== undefined ? 'failed' : 'completed',
         kind: 'tool',
       }
     case 'session.error':
