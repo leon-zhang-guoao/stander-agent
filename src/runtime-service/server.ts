@@ -4,6 +4,8 @@ import type { AgentRuntime } from '../platform/runtime'
 import type { AgentConfig, SessionMeta } from '../platform/types'
 import type { RuntimeCreateSessionRequest, RuntimePromptRequest } from './types'
 
+const MAX_REQUEST_BODY_BYTES = 1024 * 1024
+
 type RuntimeServiceSession = {
   id: string
   cwd: string
@@ -18,6 +20,15 @@ export type StanderRuntimeServiceOptions = {
   modelId: string
   host?: string
   port?: number
+}
+
+class RequestBodyError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
 }
 
 function nowIso() {
@@ -35,8 +46,14 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
   const chunks: Buffer[] = []
+  let totalBytes = 0
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buffer.length
+    if (totalBytes > MAX_REQUEST_BODY_BYTES) {
+      throw new RequestBodyError('Request body too large', 400)
+    }
+    chunks.push(buffer)
   }
   if (chunks.length === 0) {
     return {} as T
@@ -45,7 +62,11 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
   if (!text.trim()) {
     return {} as T
   }
-  return JSON.parse(text) as T
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    throw new RequestBodyError('Invalid JSON body', 400)
+  }
 }
 
 function isAuthorized(req: IncomingMessage, token: string) {
@@ -82,6 +103,39 @@ function sessionIdFromMatch(match: RegExpMatchArray) {
   return decodeURIComponent(match[1] ?? '')
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isValidCreateSessionRequest(body: unknown): body is RuntimeCreateSessionRequest {
+  if (!isObjectRecord(body)) {
+    return false
+  }
+  return (
+    (body.cwd === undefined || typeof body.cwd === 'string') &&
+    (body.modelId === undefined || typeof body.modelId === 'string')
+  )
+}
+
+function getPromptText(body: unknown) {
+  if (!isObjectRecord(body) || typeof body.text !== 'string' || body.text.trim().length === 0) {
+    return undefined
+  }
+  return body.text
+}
+
+function writeNdjsonHeader(res: ServerResponse) {
+  res.writeHead(200, {
+    'content-type': 'application/x-ndjson; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  })
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export function startStanderRuntimeService(options: StanderRuntimeServiceOptions): Server {
   const sessions = new Map<string, RuntimeServiceSession>()
   const token = options.token
@@ -96,7 +150,11 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
       const url = new URL(req.url ?? '/', 'http://localhost')
 
       if (req.method === 'POST' && url.pathname === '/v1/runtime/sessions') {
-        const body = await readJson<RuntimeCreateSessionRequest>(req)
+        const body = await readJson<unknown>(req)
+        if (!isValidCreateSessionRequest(body)) {
+          sendJson(res, 400, { error: 'Invalid session request' })
+          return
+        }
         const session: RuntimeServiceSession = {
           id: `stander-runtime-${randomUUID()}`,
           cwd: body.cwd ?? process.cwd(),
@@ -116,34 +174,74 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
           return
         }
 
+        if (session.abortController) {
+          sendJson(res, 409, { error: 'Prompt already running' })
+          return
+        }
+
         const body = await readJson<RuntimePromptRequest>(req)
-        if (!body.text || typeof body.text !== 'string') {
+        const promptText = getPromptText(body)
+        if (!promptText) {
           sendJson(res, 400, { error: 'Prompt text is required' })
           return
         }
 
         const abortController = new AbortController()
         session.abortController = abortController
-        res.writeHead(200, {
-          'content-type': 'application/x-ndjson; charset=utf-8',
-          'cache-control': 'no-cache',
-          connection: 'keep-alive',
-        })
+        let completed = false
+        let streamingStarted = false
+        const abortCurrentPrompt = () => {
+          if (!completed) {
+            abortController.abort()
+          }
+        }
+        req.on('close', abortCurrentPrompt)
+        res.on('close', abortCurrentPrompt)
 
         try {
           const runtimeEvents = options.runtime.runMessage({
             agent: createRuntimeAgent(session.modelId),
             session: toSessionMeta(session),
-            message: body.text,
+            message: promptText,
             events: [],
             signal: abortController.signal,
           })
           for await (const event of runtimeEvents) {
+            if (!streamingStarted) {
+              writeNdjsonHeader(res)
+              streamingStarted = true
+            }
             res.write(`${JSON.stringify(event)}\n`)
           }
+        } catch (error) {
+          if (!streamingStarted && !res.headersSent) {
+            sendJson(res, 500, { error: errorMessage(error) })
+            return
+          }
+          if (!res.writableEnded) {
+            if (!streamingStarted) {
+              writeNdjsonHeader(res)
+              streamingStarted = true
+            }
+            res.write(
+              `${JSON.stringify({
+                type: 'session.error',
+                sessionId: session.id,
+                message: errorMessage(error),
+                createdAt: nowIso(),
+              })}\n`,
+            )
+          }
         } finally {
-          session.abortController = undefined
-          res.end()
+          completed = true
+          req.off('close', abortCurrentPrompt)
+          res.off('close', abortCurrentPrompt)
+          if (session.abortController === abortController) {
+            session.abortController = undefined
+          }
+          if (!res.writableEnded) {
+            res.end()
+          }
         }
         return
       }
@@ -162,7 +260,11 @@ export function startStanderRuntimeService(options: StanderRuntimeServiceOptions
 
       sendJson(res, 404, { error: 'Not found' })
     } catch (error) {
-      sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+      if (error instanceof RequestBodyError) {
+        sendJson(res, error.status, { error: error.message })
+        return
+      }
+      sendJson(res, 500, { error: errorMessage(error) })
     }
   })
 
