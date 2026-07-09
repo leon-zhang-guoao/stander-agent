@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { createServer, type RequestListener, type Server } from 'node:http'
+import { once } from 'node:events'
 import {
   createJsonRpcError,
   createJsonRpcResult,
@@ -6,6 +8,11 @@ import {
   parseJsonRpcLine,
 } from './json-rpc'
 import { createAcpSessionUpdateNotification, mapSessionEventToAcpUpdate } from './event-mapping'
+import {
+  createRuntimeClientConfig,
+  parseRuntimeEventLine,
+  StanderRuntimeClient,
+} from './stander-runtime-client'
 import type { SessionEvent } from '../platform/types'
 
 const tests: Array<{ name: string; fn: () => void | Promise<void> }> = []
@@ -162,6 +169,102 @@ test('createAcpSessionUpdateNotification returns a session update notification',
       },
     },
   )
+})
+
+test('createRuntimeClientConfig reads env with azure default model', () => {
+  const config = createRuntimeClientConfig({
+    STANDER_RUNTIME_URL: 'http://runtime.internal:8787/',
+    STANDER_RUNTIME_TOKEN: 'secret',
+  })
+
+  assert.deepEqual(config, {
+    baseUrl: 'http://runtime.internal:8787',
+    token: 'secret',
+    modelId: 'azure-gpt-o4-mini',
+  })
+})
+
+test('createRuntimeClientConfig requires runtime url and token', () => {
+  assert.throws(() => createRuntimeClientConfig({ STANDER_RUNTIME_TOKEN: 'secret' }), /STANDER_RUNTIME_URL/)
+  assert.throws(() => createRuntimeClientConfig({ STANDER_RUNTIME_URL: 'http:\/\/runtime' }), /STANDER_RUNTIME_TOKEN/)
+})
+
+test('parseRuntimeEventLine returns null for blank lines and parses events', () => {
+  assert.equal(parseRuntimeEventLine(''), null)
+  assert.deepEqual(parseRuntimeEventLine('{"type":"agent.text_delta","sessionId":"s","text":"x","createdAt":"t"}'), {
+    type: 'agent.text_delta',
+    sessionId: 's',
+    text: 'x',
+    createdAt: 't',
+  })
+})
+
+async function withClientServer(handler: RequestListener, fn: (baseUrl: string) => Promise<void>) {
+  const server: Server = createServer(handler)
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const address = server.address()
+  assert.ok(address && typeof address === 'object')
+  try {
+    await fn(`http://127.0.0.1:${address.port}`)
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()))
+    })
+  }
+}
+
+test('StanderRuntimeClient creates sessions with bearer auth and model', async () => {
+  await withClientServer(async (req, res) => {
+    assert.equal(req.method, 'POST')
+    assert.equal(req.url, '/v1/runtime/sessions')
+    assert.equal(req.headers.authorization, 'Bearer secret')
+    const chunks: Buffer[] = []
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    }
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString('utf8')), {
+      cwd: '/tmp/work',
+      modelId: 'azure-gpt-o4-mini',
+    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ sessionId: 'runtime-session-1' }))
+  }, async (baseUrl) => {
+    const client = new StanderRuntimeClient({ baseUrl, token: 'secret', modelId: 'azure-gpt-o4-mini' })
+
+    assert.deepEqual(await client.createSession({ cwd: '/tmp/work' }), { sessionId: 'runtime-session-1' })
+  })
+})
+
+test('StanderRuntimeClient streams prompt ndjson events', async () => {
+  await withClientServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/x-ndjson' })
+    res.write('{"type":"agent.text_delta","sessionId":"runtime-session-1","text":"hel","createdAt":"t1"}\n')
+    res.end('{"type":"agent.message","sessionId":"runtime-session-1","text":"hello","createdAt":"t2"}\n')
+  }, async (baseUrl) => {
+    const client = new StanderRuntimeClient({ baseUrl, token: 'secret', modelId: 'azure-gpt-o4-mini' })
+    const events: SessionEvent[] = []
+
+    for await (const event of client.prompt('runtime-session-1', 'hi')) {
+      events.push(event)
+    }
+
+    assert.deepEqual(events, [
+      { type: 'agent.text_delta', sessionId: 'runtime-session-1', text: 'hel', createdAt: 't1' },
+      { type: 'agent.message', sessionId: 'runtime-session-1', text: 'hello', createdAt: 't2' },
+    ])
+  })
+})
+
+test('StanderRuntimeClient surfaces non-ok runtime errors', async () => {
+  await withClientServer(async (_req, res) => {
+    res.writeHead(500, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ error: 'boom' }))
+  }, async (baseUrl) => {
+    const client = new StanderRuntimeClient({ baseUrl, token: 'secret', modelId: 'azure-gpt-o4-mini' })
+
+    await assert.rejects(() => client.createSession({}), /Runtime request failed \(500\):/)
+  })
 })
 
 async function runTests() {
