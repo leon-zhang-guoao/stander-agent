@@ -9,7 +9,8 @@
     "build": "node node_modules/typescript/bin/tsc --noEmit",
     "test:platform-boundary": "node --import tsx src/platform/platform-boundary.test.ts",
     "test:console-ui": "node src/platform/console-ui-structure.test.mjs",
-    "test": "npm run test:platform-boundary && npm run test:console-ui && npm run build"
+    "test:acp": "node --import tsx src/acp/acp-boundary.test.ts",
+    "test": "npm run test:platform-boundary && npm run test:console-ui && npm run test:acp && npm run build"
   },
   "keywords": [],
   "author": "",
