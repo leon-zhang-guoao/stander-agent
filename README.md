@@ -115,6 +115,17 @@ npm run dev:runtime
 
 `npm run dev:server` also starts the same unified server entrypoint.
 
+For a deployment machine, use the service script:
+
+```bash
+chmod +x scripts/run.sh
+STANDER_RUNTIME_TOKEN="<shared-runtime-token>" ./scripts/run.sh start
+./scripts/run.sh status
+./scripts/run.sh logs
+```
+
+The script supports `foreground`, `start`, `stop`, `restart`, `status`, and `logs`. It also loads an optional `.env` file from the project root.
+
 ## Environment Variables
 
 Server-side:

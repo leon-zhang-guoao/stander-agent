@@ -115,6 +115,17 @@ npm run dev:runtime
 
 `npm run dev:server` 也会启动同一个统一 server 入口。
 
+部署机器可以使用服务脚本：
+
+```bash
+chmod +x scripts/run.sh
+STANDER_RUNTIME_TOKEN="<shared-runtime-token>" ./scripts/run.sh start
+./scripts/run.sh status
+./scripts/run.sh logs
+```
+
+脚本支持 `foreground`、`start`、`stop`、`restart`、`status` 和 `logs`，并会自动加载项目根目录下可选的 `.env` 文件。
+
 ## 环境变量
 
 Server 侧：
