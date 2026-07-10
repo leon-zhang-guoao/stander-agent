@@ -125,6 +125,7 @@ STANDER_RUNTIME_TOKEN="<shared-runtime-token>" ./scripts/run.sh start
 ```
 
 脚本支持 `foreground`、`start`、`stop`、`restart`、`status` 和 `logs`，并会自动加载项目根目录下可选的 `.env` 文件。
+如果交互执行 `start`、`restart` 或 `foreground` 时没有设置 `STANDER_RUNTIME_TOKEN`，脚本会以不回显的方式提示用户输入，并保存到权限为 `600` 的 `.env` 文件中。
 
 ## 环境变量
 

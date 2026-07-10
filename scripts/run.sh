@@ -4,11 +4,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ENV_FILE="${STANDER_ENV_FILE:-${PROJECT_ROOT}/.env}"
 
-if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+if [[ -f "${ENV_FILE}" ]]; then
   set -a
   # shellcheck disable=SC1091
-  source "${PROJECT_ROOT}/.env"
+  source "${ENV_FILE}"
   set +a
 fi
 
@@ -41,7 +42,62 @@ Commands:
   logs        Follow the background service log.
 
 Configuration is read from environment variables and an optional project-root .env file.
+If STANDER_RUNTIME_TOKEN is missing, interactive start commands prompt for it and save it to .env.
 EOF
+}
+
+save_env_value() {
+  local key="$1"
+  local value="$2"
+  local escaped_value
+  local temp_file
+  local found=false
+
+  printf -v escaped_value '%q' "${value}"
+  temp_file="${ENV_FILE}.tmp.$$"
+  umask 077
+  mkdir -p "$(dirname "${ENV_FILE}")"
+  : > "${temp_file}"
+
+  if [[ -f "${ENV_FILE}" ]]; then
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      if [[ "${line}" == "${key}="* || "${line}" == "export ${key}="* ]]; then
+        printf '%s=%s\n' "${key}" "${escaped_value}" >> "${temp_file}"
+        found=true
+      else
+        printf '%s\n' "${line}" >> "${temp_file}"
+      fi
+    done < "${ENV_FILE}"
+  fi
+
+  if [[ "${found}" == false ]]; then
+    printf '%s=%s\n' "${key}" "${escaped_value}" >> "${temp_file}"
+  fi
+
+  mv "${temp_file}" "${ENV_FILE}"
+  chmod 600 "${ENV_FILE}"
+}
+
+ensure_runtime_token() {
+  if [[ -n "${STANDER_RUNTIME_TOKEN:-}" ]]; then
+    return
+  fi
+
+  local token
+  if ! read -r -s -p "Enter STANDER_RUNTIME_TOKEN: " token </dev/tty; then
+    echo "Error: STANDER_RUNTIME_TOKEN is required. Set it in the environment or ${ENV_FILE}." >&2
+    exit 1
+  fi
+  printf '\n' >/dev/tty
+
+  if [[ -z "${token}" ]]; then
+    echo "Error: STANDER_RUNTIME_TOKEN cannot be empty." >&2
+    exit 1
+  fi
+
+  export STANDER_RUNTIME_TOKEN="${token}"
+  save_env_value "STANDER_RUNTIME_TOKEN" "${token}"
+  echo "STANDER_RUNTIME_TOKEN saved to ${ENV_FILE} with permissions 600."
 }
 
 ensure_runtime() {
@@ -55,9 +111,7 @@ ensure_runtime() {
     exit 1
   fi
 
-  if [[ -z "${STANDER_RUNTIME_TOKEN:-}" ]]; then
-    echo "Warning: STANDER_RUNTIME_TOKEN is not set; Web manager will run, but /v1/runtime/* will be unavailable." >&2
-  fi
+  ensure_runtime_token
 }
 
 read_pid() {

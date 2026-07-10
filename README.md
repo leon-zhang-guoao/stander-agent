@@ -125,6 +125,7 @@ STANDER_RUNTIME_TOKEN="<shared-runtime-token>" ./scripts/run.sh start
 ```
 
 The script supports `foreground`, `start`, `stop`, `restart`, `status`, and `logs`. It also loads an optional `.env` file from the project root.
+If `STANDER_RUNTIME_TOKEN` is missing during an interactive `start`, `restart`, or `foreground` command, the script prompts for it without echoing the value and saves it to `.env` with file permissions `600`.
 
 ## Environment Variables
 
